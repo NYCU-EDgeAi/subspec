@@ -79,7 +79,7 @@ class EagleSDDraftModel(ClassicSDDraftModel):
         else:
             dtype = self.lm_head.weight.dtype
         batch_size, input_len = input_ids.shape
-        max_cache_len = getattr(self.past_key_values, "max_cache_len", None)
+        max_cache_len = getattr(self.past_key_values.cache, "max_cache_len", None)
         assert batch_size == 1, "Only support batch_size=1 for now."
         
         # 2) Initialize kv_len & cache_position
@@ -96,7 +96,7 @@ class EagleSDDraftModel(ClassicSDDraftModel):
                 input_ids[:, kv_len:],
                 hidden_states=hidden_states,
                 with_softmax=True,
-                past_key_values=self.past_key_values,
+                past_key_values=self.past_key_values.cache,
                 position_ids=cache_position.unsqueeze(0),
                 cache_position=cache_position,
                 logits_to_keep=1,
@@ -163,7 +163,7 @@ class EagleSDDraftModel(ClassicSDDraftModel):
                 token_ids,
                 hidden_states=hidden_states,
                 with_softmax=True,
-                past_key_values=self.past_key_values,
+                past_key_values=self.past_key_values.cache,
                 position_ids=position_ids,
                 attention_mask=tree_attention_mask,
                 cache_position=cache_position,
@@ -205,7 +205,7 @@ class EagleSDDraftModel(ClassicSDDraftModel):
             input_ids[:, kv_len:],
             with_softmax=True,
             hidden_states=hidden_states,
-            past_key_values=self.past_key_values,
+            past_key_values=self.past_key_values.cache,
             cache_position=cache_position,
             logits_to_keep=1,
         )

@@ -40,7 +40,7 @@ class EagleSDGeneratorBase(ClassicSDGeneratorBase):
         with nvtx.annotate("llm forward", color="red"):
             outputs = self.target_model(
                 tree_input_ids.unsqueeze(0),
-                past_key_values=past_key_values,
+                past_key_values=past_key_values.cache,
                 attention_mask=tree_mask,
                 position_ids=tree_position_ids.unsqueeze(0),
                 output_hidden_states=True,
@@ -136,13 +136,13 @@ class EagleSDGeneratorBase(ClassicSDGeneratorBase):
                     # does not need output logits, just update kv-cache
                     self.target_model.model(
                         chunk,
-                        past_key_values=past_key_values,
+                        past_key_values=past_key_values.cache,
                         cache_position=cache_position,
                     )
                 else:
                     outputs = self.target_model.prefill_forward(
                         chunk,
-                        past_key_values=past_key_values,
+                        past_key_values=past_key_values.cache,
                         cache_position=cache_position,
                         output_hidden_states=True,
                         logits_to_keep=1,

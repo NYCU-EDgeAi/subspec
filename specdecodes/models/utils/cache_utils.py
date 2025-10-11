@@ -11,34 +11,63 @@ def create_kv_cache(
     device='cpu',
     dtype='float16',
 ):
-    if cache_implementation == "dynamic":
-        return TreeDynamicCache()
+    # if cache_implementation == "dynamic":
+    #     return TreeDynamicCache()
     
+    # elif cache_implementation == "static":
+    #     return TreeStaticCache(
+    #         max_cache_len=max_cache_len,
+    #         max_batch_size=max_batch_size,
+    #         config=config,
+    #         device=device,
+    #         dtype=dtype,
+    #     )
+    
+    if cache_implementation == "dynamic":
+        cache = TreeDynamicCache()
     elif cache_implementation == "static":
-        return TreeStaticCache(
+        cache = TreeStaticCache(
+            config=config,
             max_cache_len=max_cache_len,
             max_batch_size=max_batch_size,
-            config=config,
             device=device,
             dtype=dtype,
         )
+    else:
+        raise ValueError(f"Unsupported cache_implementation: {cache_implementation}")
+        
+    return KVManager(cache)
+        
+class KVManager:
+    def __init__(self, cache: Cache):
+        self.cache = cache
+        self.seq_len = 0
+        
+    def get_seq_length(self) -> int:
+        return self.seq_len
+    
+    def crop(self, start: int, end: Optional[int] = None, dim: int = 2) -> None:
+        if end is None:
+            end = self.get_seq_length()
+            
+        self.cache.crop(start, end, dim)
+    
+    def reorder_cache_with_offset(self, beam_idx: torch.LongTensor, new_chunk_len=1, offset=0, dim=0):
+        self.cache.reorder_cache_with_offset(beam_idx, new_chunk_len, offset, dim)
+    
+    def reset(self):
+        self.cache.reset()
+        self.seq_len = 0
 
 class TreeDynamicCache(DynamicCache):
     def __init__(self) -> None:
         super().__init__()
-        # user should maintain seq_len manually when using this class
-        self.seq_len = 0
-    
-    def get_seq_length(self) -> int:
-        return self.seq_len
         
     def crop(self, start: int, end: Optional[int] = None, dim: int = 2) -> None:
         """Crop the past key/values up to a new `max_length` (negative removes from the end)."""
         if end is not None:
             if start < 0:
                 start = end - abs(start)
-            if end <= start:
-                return
 
         self._seen_tokens = start
         for i in range(len(self.key_cache)):
@@ -78,7 +107,6 @@ class TreeDynamicCache(DynamicCache):
         self._seen_tokens = 0  # Used in `generate` to keep tally of how many tokens the cache has seen
         self.key_cache: List[torch.Tensor] = []
         self.value_cache: List[torch.Tensor] = []
-        self.seq_len = 0
 
 
 class TreeStaticCache(StaticCache):
@@ -97,11 +125,6 @@ class TreeStaticCache(StaticCache):
             dtype=dtype,
             max_batch_size=max_batch_size,
         )
-        # user should maintain seq_len manually when using this class
-        self.seq_len = 0
-    
-    def get_seq_length(self) -> int:
-        return self.seq_len
     
     def reset(self):
         """Resets the cache values while preserving the objects"""
@@ -109,7 +132,6 @@ class TreeStaticCache(StaticCache):
             # In-place ops prevent breaking the static address
             self.key_cache[layer_idx].zero_()
             self.value_cache[layer_idx].zero_()
-        self.seq_len = 0
 
     def crop(self, start: int, end: Optional[int] = None, dim: int = 2) -> None:
         """

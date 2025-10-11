@@ -60,7 +60,7 @@ class ClassicSDGeneratorBase(GeneratorBase):
         with nvtx.annotate("llm forward", color="red"):
             outputs = self.target_model(
                 tree_input_ids.unsqueeze(0),
-                past_key_values=past_key_values,
+                past_key_values=past_key_values.cache,
                 attention_mask=tree_mask,
                 position_ids=tree_position_ids.unsqueeze(0),
                 cache_position=cache_position
@@ -185,12 +185,13 @@ class ClassicSDGeneratorBase(GeneratorBase):
                     "max_length is not set. Only 'dynamic' kv-cache is supported when max_length is unspecified."
                 )
             
-        if model_kwargs.get("past_key_values") is not None and model_kwargs.get("draft_past_key_values") is not None:
+        if model_kwargs.get("past_key_values") is not None:
             past_key_values = model_kwargs["past_key_values"]
-            max_cache_len = getattr(past_key_values, "max_cache_len", None)
+            max_cache_len = getattr(past_key_values.cache, "max_cache_len", None)
 
-            draft_past_key_values = model_kwargs["draft_past_key_values"]
-            self.draft_model.set_past_key_values(draft_past_key_values)
+            if model_kwargs.get("draft_past_key_values") is not None:
+                draft_past_key_values = model_kwargs["draft_past_key_values"]
+                self.draft_model.set_past_key_values(draft_past_key_values)
         else:
             raise ValueError("past_key_values and draft_past_key_values should both be provided")
         
@@ -216,14 +217,14 @@ class ClassicSDGeneratorBase(GeneratorBase):
                     # does not need output logits, just update kv-cache
                     self.target_model.model(
                         chunk,
-                        past_key_values=past_key_values,
+                        past_key_values=past_key_values.cache,
                         position_ids=cache_position.unsqueeze(0),
                         cache_position=cache_position,
                     )
                 else:
                     outputs = self.target_model.prefill_forward(
                         chunk,
-                        past_key_values=past_key_values,
+                        past_key_values=past_key_values.cache,
                         position_ids=cache_position.unsqueeze(0),
                         cache_position=cache_position,
                         logits_to_keep=1,

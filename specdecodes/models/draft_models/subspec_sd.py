@@ -44,7 +44,7 @@ class SubSpecSDDraftModel(ClassicSDDraftModel):
         device = input_ids.device
         dtype = self.model.lm_head.weight.dtype
         batch_size, input_len = input_ids.shape
-        max_cache_len = getattr(self.past_key_values, "max_cache_len", None)
+        max_cache_len = getattr(self.past_key_values.cache, "max_cache_len", None)
         assert batch_size == 1, "Only support batch_size=1 for now."
         assert input_len == 1, "Value of input_len should be 1, as this is the root node of the tree."
 
@@ -61,7 +61,7 @@ class SubSpecSDDraftModel(ClassicSDDraftModel):
             sampled_probs = self(
                 input_ids,
                 with_softmax=True,
-                past_key_values=self.past_key_values,
+                past_key_values=self.past_key_values.cache,
                 position_ids=cache_position.unsqueeze(0),
                 cache_position=cache_position,
                 logits_to_keep=1,

@@ -38,7 +38,7 @@ class NaiveGeneratorBase(GeneratorBase):
 
         if model_kwargs.get("past_key_values") is not None:
             past_key_values = model_kwargs["past_key_values"]
-            max_cache_len = getattr(past_key_values, "max_cache_len", None)
+            max_cache_len = getattr(past_key_values.cache, "max_cache_len", None)
         else:
             raise ValueError("past_key_values should be provided")
 
@@ -64,14 +64,14 @@ class NaiveGeneratorBase(GeneratorBase):
                     # does not need output logits, just update kv-cache
                     self.target_model.model(
                         chunk,
-                        past_key_values=past_key_values,
+                        past_key_values=past_key_values.cache,
                         position_ids=cache_position.unsqueeze(0),
                         cache_position=cache_position,
                     )
                 else:
                     outputs = self.target_model.prefill_forward(
                         chunk,
-                        past_key_values=past_key_values,
+                        past_key_values=past_key_values.cache,
                         position_ids=cache_position.unsqueeze(0),
                         cache_position=cache_position,
                         logits_to_keep=1,
@@ -94,7 +94,7 @@ class NaiveGeneratorBase(GeneratorBase):
                 with nvtx.annotate("llm forward", color="orange"):
                     outputs = self.target_model(
                         next_tokens,
-                        past_key_values=past_key_values,
+                        past_key_values=past_key_values.cache,
                         position_ids=cache_position.unsqueeze(0),
                         cache_position=cache_position,
                     )
