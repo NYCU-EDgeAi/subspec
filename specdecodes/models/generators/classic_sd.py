@@ -20,21 +20,28 @@ class ClassicSDGeneratorBase(GeneratorBase):
         if not hasattr(self, 'tree_mask_update_method'):
             self.tree_mask_update_method = 'static' if max_cache_len is not None else 'dynamic'
             logging.debug(f"'max_cache_len' is {'set, uses static' if max_cache_len else 'not set, uses dynamic'} tree_mask.")
-    
+        
         tree_mask = (
             torch.zeros((1, 1, max_verify_tokens, max_cache_len), device=device, dtype=torch.bool)
             if max_cache_len is not None else None
         )
+        self.base_tree_mask = tree_mask
             
         return tree_mask
-        
+
     def _update_tree_mask(self, tree_mask, tree_mask_partial):
         if self.tree_mask_update_method == 'static':
-            tree_mask[:, :, :, :tree_mask_partial.shape[3]] = tree_mask_partial
+            # Avoid prints in hot path; use logging if needed.
+            _, _, K, D = tree_mask_partial.shape
+
+            # Slice to the same shape as the partial input
+            tree_mask_view = self.base_tree_mask[:, :, :K, :].clone()
+            tree_mask_view[:, :, :K, :D] = tree_mask_partial
+
+            # Return view with the correct shape
+            return tree_mask_view
         else:
-            tree_mask = tree_mask_partial
-        
-        return tree_mask   
+            return tree_mask_partial
 
     def _tree_decoding(self, tree, tree_mask, past_key_values, position_offset, cache_position, device):
         # Preparing target_model's tree decoding data, also updates each node's index (node.ind).
@@ -74,7 +81,7 @@ class ClassicSDGeneratorBase(GeneratorBase):
         else:
             return None, sampled_token_id
     
-    def _verify(self, tree, logits, logits_processor, do_sample):
+    def _verify(self, tree, root_ind, logits, logits_processor, do_sample, skip_nodes=0):
         # Obtain LLM sample logits
         # global_p = sample_token_method(logits, return_probs=True).squeeze(0).to(device='cpu') # remove batch dim
         global_p = self._sample_token(logits, logits_processor, do_sample, return_probs=True)
@@ -86,11 +93,11 @@ class ClassicSDGeneratorBase(GeneratorBase):
         total_len = accept_len = 0
         
         # Iterate through draft tree, verify each node
-        node_data = tree.get_tree_data()
+        node_data = tree.get_tree_data(skip_nodes=skip_nodes)
         token_ids = node_data['token_ids']  # (num_nodes,)
-        cur_ind = torch.tensor([0], dtype=torch.long, device='cpu')  # start at root
+        cur_ind = torch.tensor([root_ind], dtype=torch.long, device='cpu') # start at root
         children_inds = tree.get_children_indices(cur_ind)
-        children_token_ids = token_ids[children_inds]
+        children_token_ids = token_ids[children_inds-skip_nodes]
         
         torch.cuda.synchronize() # synchronize before starting the loop
         while children_inds.numel() > 0:
@@ -114,7 +121,7 @@ class ClassicSDGeneratorBase(GeneratorBase):
                 # Update
                 cur_ind = children_inds[children_token_ids == accept_token_id]
                 children_inds = tree.get_children_indices(cur_ind)
-                children_token_ids = token_ids[children_inds]
+                children_token_ids = token_ids[children_inds-skip_nodes]
             
             # Reject token, break
             else:
@@ -132,7 +139,7 @@ class ClassicSDGeneratorBase(GeneratorBase):
             if bonus_token is not None:
                 sampled_tokens = torch.cat([sampled_tokens, bonus_token.unsqueeze(0)])
                 hidden_indices = torch.cat([hidden_indices, cur_ind])
-        
+                
         return sampled_tokens.unsqueeze(0), hidden_indices, (total_len, accept_len)
 
     def _generate(
