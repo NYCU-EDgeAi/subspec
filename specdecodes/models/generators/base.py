@@ -18,6 +18,8 @@ class GeneratorBase(nn.Module):
             self.draft_model = draft_model
             self.draft_params = draft_params
             self.draft_model.draft_params = draft_params
+        else:
+            self.draft_model = None
 
         self.cache_implementation = cache_implementation
         

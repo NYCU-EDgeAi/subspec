@@ -210,7 +210,7 @@ class GeneratorPipelineBuilder:
             if draft_model and draft_config and draft_config.get("device_map"):
                 self.recipe.apply_offloading(draft_model.model, draft_config["device_map"])
             if target_config and target_config.get("device_map"):
-                self.recipe.apply_offloading(model, target_config["device_map"])
+                self.recipe.apply_offloading(model, target_config["device_map"], draft_model=draft_model)
 
         return model, draft_model, tokenizer
     

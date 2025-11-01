@@ -19,6 +19,11 @@ def share_param_deepcopy(model):
     return share_model
 
 class SubSpecSDDraftModel(ClassicSDDraftModel):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.had_first_speculate = False
+        self.postspec_count = 0
+    
     @classmethod
     def from_pretrained(
         cls, 
@@ -40,6 +45,8 @@ class SubSpecSDDraftModel(ClassicSDDraftModel):
     
     @torch.no_grad()
     def speculate(self, input_ids, **kwargs):
+        self.had_first_speculate = True
+        
         # 1) Obtain necessary parameters
         device = input_ids.device
         dtype = self.model.lm_head.weight.dtype
@@ -107,10 +114,32 @@ class SubSpecSDDraftModel(ClassicSDDraftModel):
         self.update_tree(self.tree_data)
         return self.tree
     
+    def init_postspec(self):
+        self.tree_data = TreeData()
+        self.postspec_count = 0
+        
     @torch.no_grad()
-    def post_speculate(self):
+    def postspec(self):
+        # if not self.had_first_speculate:
+        #     #print("Post speculate before first speculate, skip.")
+        #     pass
+        # elif self.postspec_count >= self.post_draft_params.max_depth:
+        #     #print("Post speculate reached max depth, skip.")
+        #     pass
+        # if self.had_first_speculate and self.postspec_count < self.post_draft_params.max_depth:
+        #     print(f"Post speculate round {self.postspec_count+1}/{self.post_draft_params.max_depth}")
+        #     self.postspec_count += 1
+        #     self.speculate_once()
+            
         # 5) Main loop
         self.tree_data = TreeData()
         for depth_i in range(self.post_draft_params.max_depth):
             self.speculate_once()
-        
+            
+    def update_tree_after_post(self):
+        """
+        Get the tree structure 
+        """
+        # Update the tree data and mask cache before returning
+        self.update_tree(self.tree_data)
+        return self.tree

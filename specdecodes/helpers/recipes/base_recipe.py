@@ -52,7 +52,7 @@ class QuantOffloadRecipe:
         
         self.quantizer.quantize_model(model, quant_config, dtype, device)
 
-    def apply_offloading(self, model: Any, device_map: Dict[str, Any]):
+    def apply_offloading(self, model: Any, device_map: Dict[str, Any], draft_model: Any = None):
         """
         Apply offloading to the provided model using the device mapping.
         If no offloader is provided, offloading is skipped.
@@ -61,4 +61,4 @@ class QuantOffloadRecipe:
             logging.info("No offloader provided; skipping offloading.")
             return
         
-        return self.offloader(model, device_map=device_map)
+        return self.offloader(model, device_map=device_map, draft_model=draft_model)

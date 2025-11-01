@@ -58,6 +58,7 @@ class PrefetchOffloader:
         self.cpu_tensors = {}
         self.stream = torch.cuda.Stream()
         self.record_stream = record_stream
+        self.draft_model = draft_model
 
         self._cache_cpu_layers(model, device_map)
         assert model.model.embed_tokens.weight.device.type == "cuda"
@@ -97,7 +98,7 @@ class PrefetchOffloader:
             first_cpu_layer.register_forward_pre_hook(self._create_wait_hook(), prepend=True) # Prepend to ensure wait runs before prefetch
             # The last CPU layer prefetches the first CPU layer (forming a loop)
             current_layer.register_forward_pre_hook(self._create_prefetch_hook(first_cpu_layer, self.cpu_tensors[first_name]))
-
+    
     def _cache_cpu_layers(self, model, device_map):
         """Moves CPU layers to pinned memory and creates GPU-shaped placeholders."""
         tensor_cache = {}
@@ -130,6 +131,9 @@ class PrefetchOffloader:
                     c.copy_to(p.data, non_blocking=True)
                     if self.record_stream:
                         p.data.record_stream(torch.cuda.current_stream())
+            
+            # Run draft
+            # self.draft_model.postspec()
 
         return hook
 
