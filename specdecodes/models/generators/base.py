@@ -90,15 +90,19 @@ class GeneratorBase(nn.Module):
             )
         if max_time is not None:
             criteria.append(MaxTimeCriteria(max_time=max_time))
+        if stop_strings is not None:
+            if self.tokenizer is None:
+                raise ValueError(
+                    "There are one or more stop strings, either in the arguments to `generate` or in the "
+                    "model's generation config, but we could not locate a tokenizer. When generating with "
+                    "stop strings, you must pass the model's tokenizer to the `tokenizer` argument of `generate`."
+                )
+            criteria.append(StopStringCriteria(stop_strings=stop_strings, tokenizer=self.tokenizer))
         if eos_token_tensor is not None:
             # EosTokenCriteria only checks last input token,
             # make sure not token is appended after eos_token_tensor during generation
             criteria.append(EosTokenCriteria(eos_token_id=eos_token_tensor))
-
-        if stop_strings is not None and self.tokenizer is not None:
-            print(f"Using stop strings: {stop_strings}")
-            criteria.append(StopStringCriteria(self.tokenizer, stop_strings))
-
+        
         return criteria
     
     def _sample_token(
