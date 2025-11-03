@@ -290,10 +290,10 @@ class ClassicSDGeneratorBase(GeneratorBase):
                 # * check stopping criteria
                 with nvtx.annotate("stopping criteria"):
                     for k in range(sampled_tokens.shape[1]):    
-                        finished = stopping_criteria(sampled_tokens[:, 0:k+1], None).item()
+                        finished = stopping_criteria(sampled_tokens[:, k:k+1], None).item()
                         if finished:
+                            input_ids = input_ids[:, :-(sampled_tokens.shape[1]-k-1)] if (sampled_tokens.shape[1]-k-1)>0 else input_ids
                             break
-                    finished = finished or bool(stopping_criteria(input_ids, None))
                     
         return input_ids
     
