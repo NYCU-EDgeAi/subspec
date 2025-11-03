@@ -268,8 +268,9 @@ class ClassicSDGeneratorBase(GeneratorBase):
 
                 # * verify
                 with nvtx.annotate("verify"):
+                    root_ind = 0
                     sampled_tokens, hidden_indices, (total_len, accept_len) = self._verify(
-                                                        tree, next_token_logits, 
+                                                        tree, root_ind, next_token_logits, 
                                                         logits_processor,
                                                         do_sample
                                                     )
@@ -288,8 +289,12 @@ class ClassicSDGeneratorBase(GeneratorBase):
                 
                 # * check stopping criteria
                 with nvtx.annotate("stopping criteria"):
-                    finished = stopping_criteria(input_ids, None).item()
-                
+                    for k in range(sampled_tokens.shape[1]):    
+                        finished = stopping_criteria(sampled_tokens[:, 0:k+1], None).item()
+                        if finished:
+                            break
+                    finished = finished or bool(stopping_criteria(input_ids, None))
+                    
         return input_ids
     
 class ClassicSDGenerator(SDProfilingMixin, ClassicSDGeneratorBase):
