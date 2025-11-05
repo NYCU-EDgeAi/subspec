@@ -78,7 +78,6 @@ class GeneratorPipelineBuilder:
         """
         Set up torch configurations for reproducibility and performance.
         """
-        torch.set_float32_matmul_precision('high')
         torch.manual_seed(self.seed)
         random.seed(self.seed)
         

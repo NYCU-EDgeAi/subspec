@@ -85,7 +85,6 @@ class SubSpecSDGeneratorBase(ClassicSDGeneratorBase):
                 )
                 # last iteration
                 if start + chunk_size < prefill_length:
-                    # does not need output logits, just update kv-cache
                     self.target_model.model(
                         chunk,
                         past_key_values=past_key_values.cache,
@@ -107,6 +106,8 @@ class SubSpecSDGeneratorBase(ClassicSDGeneratorBase):
 
         with nvtx.annotate("sample tokens"):
             sampled_tokens = self._sample_token(next_token_logits, logits_processor, do_sample)
+            #print(f"After prefill, sampled token: {self.tokenizer.decode(sampled_tokens[0])}")
+            #return "end"
 
         with nvtx.annotate("update data"):
             input_ids = torch.cat([input_ids, sampled_tokens], dim=-1)
@@ -131,8 +132,9 @@ class SubSpecSDGeneratorBase(ClassicSDGeneratorBase):
 
                 # * verify
                 with nvtx.annotate("verify"):
+                    root_ind = 0
                     sampled_tokens, hidden_indices, (total_len, accept_len) = self._verify(
-                                                            tree, next_token_logits, 
+                                                            tree, root_ind, next_token_logits, 
                                                             logits_processor,
                                                             do_sample
                                                         )
@@ -150,7 +152,11 @@ class SubSpecSDGeneratorBase(ClassicSDGeneratorBase):
                 
                 # * check stopping criteria
                 with nvtx.annotate("stopping criteria"):
-                    finished = stopping_criteria(input_ids, None).item()
+                    for k in range(sampled_tokens.shape[1]):    
+                        finished = stopping_criteria(sampled_tokens[:, k:k+1], None).item()
+                        if finished:
+                            input_ids = input_ids[:, :-(sampled_tokens.shape[1]-k-1)] if (sampled_tokens.shape[1]-k-1)>0 else input_ids
+                            break
                 
         return input_ids
     

@@ -13,15 +13,16 @@ class NaiveBuilder(GeneratorPipelineBuilder):
         self.dtype = torch.float16
         
         # Model paths.
-        self.llm_path = "meta-llama/Llama-3.1-8B-Instruct"
+        self.llm_path = "Qwen/Qwen3-8B"
         
         # Generation parameters.
+        self.max_length = 16 * 1024
         self.do_sample = False
         self.temperature = 0
         
         # Generator-specific configurations.
         self.generator_kwargs = {
-            "prefill_chunk_size": 256,
+            "prefill_chunk_size": 4096,
         }
         
         # Recipe for quantization and offloading.
@@ -29,7 +30,7 @@ class NaiveBuilder(GeneratorPipelineBuilder):
         
         # Additional configurations.
         self.cache_implementation = "static"
-        self.warmup_iter = 3
+        self.warmup_iter = 1
         self.compile_mode = "max-autotune"
         
         # Profiling

@@ -8,7 +8,7 @@ import logging
 import gc
 from tqdm import tqdm
 
-from .benchmarks.utils.eval import run_common_eval, run_mtbench_eval
+from .benchmarks.utils.eval import run_common_eval, run_mtbench_eval, run_agent_eval
 from .benchmarks.mtbench import load_mtbench_dataset
 from .benchmarks.humaneval import load_humaneval_dataset
 from .benchmarks.gsm8k import load_gsm8k_dataset
@@ -18,6 +18,7 @@ from .benchmarks.aime import load_aime_dataset
 from .benchmarks.gpqa import load_gpqa_dataset
 from .benchmarks.math500 import load_math500_dataset
 from .benchmarks.livecodebench import load_livecodebench_dataset
+from .benchmarks.hotpotqa import load_hotpotqa_dataset
 
 DATASET_LOADER = {
     "mt-bench": load_mtbench_dataset,
@@ -29,6 +30,7 @@ DATASET_LOADER = {
     "gpqa": load_gpqa_dataset,
     "math-500": load_math500_dataset,
     "livecodebench": load_livecodebench_dataset,
+    "hotpotqa": load_hotpotqa_dataset,
 }
 
 BENCHMARK_EVALUATORS = {
@@ -41,6 +43,7 @@ BENCHMARK_EVALUATORS = {
     "gpqa": run_common_eval,
     "math-500": run_common_eval,
     "livecodebench": run_common_eval,
+    "hotpotqa": run_agent_eval,
 }
 
 # Benchmarks

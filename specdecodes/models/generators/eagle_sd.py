@@ -180,8 +180,9 @@ class EagleSDGeneratorBase(ClassicSDGeneratorBase):
 
                 # * verify
                 with nvtx.annotate("verify"):
+                    root_ind = 0
                     sampled_tokens, hidden_indices, (total_len, accept_len) = self._verify(
-                                                        tree, next_token_logits, 
+                                                        tree, root_ind, next_token_logits, 
                                                         logits_processor,
                                                         do_sample
                                                     )
@@ -202,7 +203,11 @@ class EagleSDGeneratorBase(ClassicSDGeneratorBase):
                 
                 # * check stopping criteria
                 with nvtx.annotate("stopping criteria"):
-                    finished = stopping_criteria(input_ids, None).item()
+                    for k in range(sampled_tokens.shape[1]):    
+                        finished = stopping_criteria(sampled_tokens[:, k:k+1], None).item()
+                        if finished:
+                            input_ids = input_ids[:, :-(sampled_tokens.shape[1]-k-1)] if (sampled_tokens.shape[1]-k-1)>0 else input_ids
+                            break
                     
             # * draft kv missing last llm hidden_states for multi-turn tasks
             self.draft_model.final_update(input_ids, hidden_states)

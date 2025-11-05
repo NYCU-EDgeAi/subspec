@@ -14,11 +14,11 @@ class ClassicSDBuilder(GeneratorPipelineBuilder):
         self.seed = 0
         self.device = "cuda:0"
         self.dtype = torch.float16
-        self.max_length = 2048
+        self.max_length = 10 * 1024
         
         # Model paths.
-        self.llm_path = "meta-llama/Llama-3.1-8B-Instruct"
-        self.draft_model_path = "meta-llama/Llama-3.2-1B-Instruct"
+        self.llm_path = "Qwen/Qwen3-8B"#"meta-llama/Llama-3.1-8B-Instruct"
+        self.draft_model_path = "Qwen/Qwen3-1.7B"#"meta-llama/Llama-3.2-1B-Instruct"
         
         # Generation parameters.
         self.do_sample = False
@@ -26,7 +26,7 @@ class ClassicSDBuilder(GeneratorPipelineBuilder):
         
         # Generator-specific configurations.
         self.generator_kwargs = {
-            "prefill_chunk_size": 256,
+            "prefill_chunk_size": 4096,
         }
         self.draft_params = DraftParams(
             temperature=1,
@@ -39,7 +39,7 @@ class ClassicSDBuilder(GeneratorPipelineBuilder):
         
         # Additional configurations.
         self.cache_implementation = "static"
-        self.warmup_iter = 3
+        self.warmup_iter = 1
         self.compile_mode = "max-autotune"
         
         # Profiling.

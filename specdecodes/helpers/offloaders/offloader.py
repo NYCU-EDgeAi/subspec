@@ -38,7 +38,7 @@ def check_device_map(model: nn.Module, device_map: dict):
         )
 
 class Offloader:
-    def __init__(self, model, device_map, record_stream=False):  
+    def __init__(self, model: nn.Module, device_map: dict, record_stream=False, draft_model: nn.Module = None): 
         # Debugging, check if device_map covers all tensors in the model
         check_device_map(model, device_map)
         

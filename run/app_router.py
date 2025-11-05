@@ -20,6 +20,16 @@ def run_app(builder):
         
         # torch.cuda.memory._dump_snapshot("my_snapshot.pickle")
         # torch.cuda.memory._record_memory_history(enabled=None)
+    
+    @app.command()
+    def run_agent_test():
+        """
+        Example subcommand for a test run.
+        Usage:
+            python custom.py run-test
+        """
+        from .pipelines.run_agent_test import main as run_agent_test
+        run_agent_test(builder)
 
     @app.command()
     def run_grid_search(t: str, d: str, k: str, max_samples: int = None):
