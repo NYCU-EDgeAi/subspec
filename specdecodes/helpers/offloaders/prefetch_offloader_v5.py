@@ -1,3 +1,4 @@
+import time
 import torch
 from torch import nn
 from ..model_layer_orders import MODEL_TYPE_GET_LAYER_ORDER
@@ -46,6 +47,18 @@ class ChunkedPinMemory:
         for chunk, size in zip(self.chunks, self.sizes):
             flat_gpu[offset : offset + size].copy_(chunk, non_blocking=non_blocking)
             offset += size
+            
+# class ChunkedPinMemory:
+#     """
+#     Splits a tensor into power-of-2 pinned-memory chunks,
+#     ensuring chunk size doesn't fall below a specified minimum size (1MB default).
+#     """
+#     def __init__(self, org_tensor, min_chunk_bytes=1 * 1024 * 1024):
+#         self.org_tensor = org_tensor
+
+#     def copy_to(self, gpu_tensor, non_blocking=False):
+#         self.org_tensor.copy_(gpu_tensor, non_blocking=non_blocking)
+        
 
 def trim_layer_number(name: str) -> str:
     """Removes numeric fields from a dotted path (e.g. 'layer.0' -> 'layer')."""
@@ -83,27 +96,27 @@ class PrefetchOffloader:
 
         # Connect subsequent CPU layers in a chain
         current_layer = first_cpu_layer
+        # print("Applying PrefetchOffloader V5:")
         for name in cpu_layer_order[1:]:
-            if device_map.get(name) == "cpu":
-                next_layer = find_child(model, name)
-                current_layer.register_forward_pre_hook(self._create_prefetch_hook(next_layer, self.cpu_tensors[name]))
-                current_layer = next_layer
-                
-                current_layer.register_forward_pre_hook(self._create_wait_hook())
-
-        # Connect the last CPU layer to the first CPU layer
-        if current_layer != first_cpu_layer: # If there is only one CPU layer, no need to prefetch
-            # Set up pre-hook (wait for copy) and post-hook (offload) for the first CPU layer
-            first_cpu_layer.register_forward_pre_hook(self._create_wait_hook(), prepend=True) # Prepend to ensure wait runs before prefetch
-            # The last CPU layer prefetches the first CPU layer (forming a loop)
-            current_layer.register_forward_pre_hook(self._create_prefetch_hook(first_cpu_layer, self.cpu_tensors[first_name]))
-
+            # print(f"layer: {name}")
+            next_layer = find_child(model, name)
+            current_layer.register_forward_pre_hook(self._create_wait_hook())
+            current_layer.register_forward_pre_hook(self._create_prefetch_hook(next_layer, self.cpu_tensors[name]))
+            # current_layer.register_forward_hook(self._create_slowdown_hook())
+            current_layer = next_layer
+            
+        current_layer.register_forward_pre_hook(self._create_wait_hook())
+        current_layer.register_forward_pre_hook(self._create_prefetch_hook(first_cpu_layer, self.cpu_tensors[first_name]))
+        # current_layer.register_forward_hook(self._create_slowdown_hook())
+    
     def _cache_cpu_layers(self, model, device_map):
         """Moves CPU layers to pinned memory and creates GPU-shaped placeholders."""
         tensor_cache = {}
+        # print("Caching CPU layers with PrefetchOffloader V5:")
         for name, dev_str in device_map.items():
             layer = find_child(model, name)
             if dev_str == "cpu":
+                # print(f"layer: {name}")
                 trimmed = trim_layer_number(name)
                 if trimmed not in tensor_cache:
                     placeholders = [torch.zeros_like(p, device=self.gpu_device, memory_format=torch.contiguous_format)
@@ -132,9 +145,16 @@ class PrefetchOffloader:
                         p.data.record_stream(torch.cuda.current_stream())
 
         return hook
+    
+    def _create_slowdown_hook(self):
+        """Adds a small delay to test timing effects."""
+        def hook(module, inputs, output):
+            time.sleep(0.05)
+        return hook
 
     def _create_wait_hook(self):
         """Waits for any pending async copies in self.stream to finish before forward execution."""
         def hook(module, inputs):
-            torch.cuda.current_stream().wait_stream(self.stream)
+            # torch.cuda.current_stream().wait_stream(self.stream)
+            torch.cuda.synchronize()
         return hook
