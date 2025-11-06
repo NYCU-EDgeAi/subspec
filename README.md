@@ -27,7 +27,7 @@ You will need to install the additional libraries for quantization:
 - HQQ (Default)
 ```bash
 pip install hqq
-pip install gemlite
+pip install gemlite==0.5.1.post1
 ```
 - HIGGS (optional)
 ```bash
