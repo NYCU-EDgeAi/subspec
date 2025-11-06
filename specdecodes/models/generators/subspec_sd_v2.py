@@ -156,117 +156,99 @@ class SubSpecSDGeneratorBase(ClassicSDGeneratorBase):
             position_offset = input_ids.shape[1]-1
             cache_position = torch.arange(org_input_len, org_input_len+self.draft_params.max_verify_tokens, dtype=torch.long, device=input_ids.device)
 
+        with nvtx.annotate("speculate", color="cyan"):
+            last_token_id = sampled_tokens[:, -1:].clone(memory_format=torch.contiguous_format)
+            tree = self._speculate(last_token_id)
+
         with nvtx.annotate("decoding"):
+            finished = False
             count = 0
             post_count = 0
             regular_count = 0
+
             accept_post_tree = False
             sampled_tokens_cache = None
             hidden_indices_cache = None
             last_tree_size = 0
-            last_tree_depth = 0
-            
-            finished = False
             while not finished:
                 # * tree decoding
                 with nvtx.annotate("tree_decoding", color="orange"):
-                    if accept_post_tree:
-                        position_offset = input_ids.shape[1] - 1 + last_tree_depth
-                        cache_offset = input_ids.shape[1] - 1 + last_tree_size
-                        new_draft_token_count = tree.size() - last_tree_size
-                        cache_position = torch.arange(cache_offset, cache_offset+new_draft_token_count, dtype=torch.long, device=input_ids.device)
-
-                        outputs = self._tree_decoding(tree, tree_mask, past_key_values, position_offset=position_offset, cache_position=cache_position,
-                                                      skip_nodes=last_tree_size,
-                                                      device=input_ids.device)
-                        next_token_logits = outputs.logits
-                        
-                    else:
-                        last_token_id = sampled_tokens[:, -1:].clone(memory_format=torch.contiguous_format)
-                        tree = self._speculate(last_token_id)
-                        position_offset = input_ids.shape[1] - 1
-                        cache_position = torch.arange(position_offset, position_offset+tree.size(), dtype=torch.long, device=input_ids.device)
-                        
-                        self.draft_model.init_postspec()
-                        outputs = self._tree_decoding(tree, tree_mask, past_key_values, position_offset=position_offset, cache_position=cache_position, 
-                                                      skip_nodes=0, # sampled_tokens.shape[1] if accept_post_tree else 0,
-                                                      device=input_ids.device)
-                        next_token_logits = outputs.logits
-                        
-                        last_tree_size = 0
-                        last_tree_depth = 0
-                        tree_size = tree.size()
-                        tree_depth = tree.get_depth().item()
-
+                    
+                    skip_nodes = last_tree_size if accept_post_tree else 0
+                    self.draft_model.init_postspec()
+                    
+                    outputs = self._tree_decoding(tree, tree_mask, past_key_values, position_offset=position_offset, cache_position=cache_position, skip_nodes=skip_nodes, device=input_ids.device)
+                    next_token_logits = outputs.logits
+                    tem_tree_size = tree.size()
+                
+                with nvtx.annotate("update_post_tree", color="cyan"):
+                    tree = self.draft_model.update_tree_after_post()
+                
                 # * verify
-                with nvtx.annotate("verify"):
+                with nvtx.annotate("verify"): 
                     skip_nodes = last_tree_size if accept_post_tree else 0
                     root_ind = root_ind if accept_post_tree else 0
-                    sampled_tokens, hidden_indices, (total_len, accept_len) = self._verify(
-                                                            tree, root_ind, next_token_logits, 
+                    
+                    sampled_tokens, hidden_indices, (total_len, sampled_len) = self._verify(
+                                                            tree, root_ind ,next_token_logits, 
                                                             logits_processor,
-                                                            do_sample, skip_nodes=skip_nodes,
+                                                            do_sample, 
+                                                            skip_nodes=skip_nodes,
                                                         )
-                             
+                    
                     last_accepted_ind = hidden_indices[-1]
                     bonus_token = sampled_tokens[:, -1].item()
                     sampled_tokens = sampled_tokens.to(input_ids.device)
                     hidden_indices = hidden_indices.to(input_ids.device)
-                    
+
                     if accept_post_tree:
                         sampled_tokens_cache = torch.cat([sampled_tokens_cache, sampled_tokens], dim=-1)
                         hidden_indices_cache = torch.cat([hidden_indices_cache, hidden_indices], dim=-1)
                     else:
                         sampled_tokens_cache = sampled_tokens
                         hidden_indices_cache = hidden_indices
+
+                # print(f"Current sampled ({sampled_tokens_cache.shape[1]}):", self.tokenizer.batch_decode(sampled_tokens_cache.squeeze(0), skip_special_tokens=False))
                 
-                print("--- Old tree:")
-                tree.print_tree_structure(tokenizer=self.tokenizer)
-                print(f">>> Current sampled ({sampled_tokens_cache.shape[1]}):", self.tokenizer.batch_decode(sampled_tokens_cache.squeeze(0), skip_special_tokens=True))
-                print(f">>> Current hidden indices ({hidden_indices_cache.shape[0]}):", hidden_indices_cache.squeeze(0).tolist())
-                # self.draft_model.init_postspec()
-                # for depth_i in range(self.draft_model.post_draft_params.max_depth):
-                #     self.draft_model.speculate_once()
-                self.draft_model.postspec()
-                tree = self.draft_model.update_tree_after_post()
+                last_tree_size = tem_tree_size                
+                root_ind = tree.find_child_index(last_accepted_ind, bonus_token)
                 
-                print("--- Old tree:")
-                tree.print_tree_structure(tokenizer=self.tokenizer)
-                
-                last_tree_size = tree_size
-                last_tree_depth = tree_depth
-                tree_size = tree.size()
-                tree_depth = tree.get_depth().item()
-                
-                sampled_len = sampled_tokens.shape[1]
-                if sampled_len > last_tree_depth or (accept_post_tree and sampled_len == tree_depth):
-                    root_ind = tree.find_child_index(last_accepted_ind, bonus_token)
-                    if root_ind is not None:
-                        accept_post_tree = True
-                        print("$ Accept post tree, root_ind:", root_ind, "bonus_token:", self.tokenizer.decode(bonus_token))
-                    else:
-                        accept_post_tree = False
-                        print("$ Reject post tree, root_ind:", root_ind, "bonus_token:", self.tokenizer.decode(bonus_token))
+                if root_ind is not None:
+                    accept_post_tree = True 
                 else:
-                    accept_post_tree = False
-                    print("$ Reject post tree, sampled_len:", sampled_len, "tree_depth:", tree_depth)
-                
-                with nvtx.annotate("reorder kv"):
-                    count += 1
-                        
-                    if accept_post_tree:
-                        post_count += 1
-                        pass
-                    else:
-                        regular_count += 1
-                        past_key_values.reorder_cache_with_offset(hidden_indices_cache, offset=past_key_values.get_seq_length(), new_chunk_len=last_tree_size, dim=2)
-                        past_key_values.seq_len += hidden_indices_cache.shape[0]
-                        print(">>> Concat sampled_tokens to input_ids.")
-                        input_ids = torch.cat([input_ids, sampled_tokens_cache], dim=-1)
+                    accept_post_tree = False 
+
+                if (sampled_tokens_cache.shape[1]>100):
+                    accept_post_tree = False 
                 
                 # * check stopping criteria
                 with nvtx.annotate("stopping criteria"):
-                    finished = stopping_criteria(input_ids, None).item()
+                    finished = stopping_criteria(sampled_tokens_cache, None).item()
+
+                with nvtx.annotate("reorder kv"):
+                    count += 1
+                    if finished:
+                        input_ids = torch.cat([input_ids, sampled_tokens_cache], dim=-1)
+                    elif not accept_post_tree:
+                        # print("reject post tree,re speculate")
+                        regular_count += 1
+                        past_key_values.reorder_cache_with_offset(hidden_indices_cache, offset=past_key_values.get_seq_length(), new_chunk_len=last_tree_size, dim=2)
+                        past_key_values.seq_len += hidden_indices_cache.shape[0]
+                        input_ids = torch.cat([input_ids, sampled_tokens_cache], dim=-1)
+                        
+                        with nvtx.annotate("speculate", color="cyan"):
+                            last_token_id = sampled_tokens[:, -1:].clone(memory_format=torch.contiguous_format)
+                            tree = self._speculate(last_token_id)
+                            last_tree_size = tree.size()
+
+                        position_offset = input_ids.shape[1] - 1
+                        cache_position = torch.arange(input_ids.shape[1]-1, input_ids.shape[1]-1+tree.size(), dtype=torch.long, device=input_ids.device)
+                    else:  
+                        # print("accept post tree")
+                        post_count += 1
+                        position_offset = input_ids.shape[1] - 1 
+                        cache_position = torch.arange(input_ids.shape[1]+last_tree_size -1, input_ids.shape[1]+tree.size()-1, dtype=torch.long, device=input_ids.device)                     
+                        
         print("count:", count, "post_count:", post_count, "regular_count:", regular_count)        
         return input_ids
     

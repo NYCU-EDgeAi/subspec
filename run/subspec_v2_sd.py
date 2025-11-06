@@ -39,7 +39,7 @@ class SubSpecSDBuilder(GeneratorPipelineBuilder):
         
         self.post_draft_params = DraftParams(
             temperature=0.2,
-            max_depth=4,
+            max_depth=16,
             topk_len=6,
         )
         

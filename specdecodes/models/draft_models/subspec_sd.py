@@ -120,22 +120,17 @@ class SubSpecSDDraftModel(ClassicSDDraftModel):
         
     @torch.no_grad()
     def postspec(self):
-        # if not self.had_first_speculate:
-        #     #print("Post speculate before first speculate, skip.")
-        #     pass
-        # elif self.postspec_count >= self.post_draft_params.max_depth:
-        #     #print("Post speculate reached max depth, skip.")
-        #     pass
-        # if self.had_first_speculate and self.postspec_count < self.post_draft_params.max_depth:
-        #     print(f"Post speculate round {self.postspec_count+1}/{self.post_draft_params.max_depth}")
-        #     self.postspec_count += 1
-        #     self.speculate_once()
-            
-        # 5) Main loop
-        self.tree_data = TreeData()
-        for depth_i in range(self.post_draft_params.max_depth):
-            self.speculate_once()
-            
+        if not self.had_first_speculate:
+                #print("Post speculate before first speculate, skip.")
+                pass
+        elif self.postspec_count >(self.post_draft_params.max_depth - 1):
+                #print("Post speculate reached max depth, skip.")
+                pass
+        else:
+            with nvtx.annotate("post_speculate_once", color="blue"):
+                self.speculate_once()
+            self.postspec_count += 1
+    
     def update_tree_after_post(self):
         """
         Get the tree structure 

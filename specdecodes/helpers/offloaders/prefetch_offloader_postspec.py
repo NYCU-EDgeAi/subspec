@@ -82,22 +82,21 @@ class PrefetchOffloader:
             # p.data.copy_(c)
             c.copy_to(p.data)
 
-        # Connect subsequent CPU layers in a chain
         current_layer = first_cpu_layer
         for name in cpu_layer_order[1:]:
-            if device_map.get(name) == "cpu":
-                next_layer = find_child(model, name)
-                current_layer.register_forward_pre_hook(self._create_prefetch_hook(next_layer, self.cpu_tensors[name]))
-                current_layer = next_layer
-                
-                current_layer.register_forward_pre_hook(self._create_wait_hook())
+            # print(f"layer: {name}")
+            next_layer = find_child(model, name)
 
-        # Connect the last CPU layer to the first CPU layer
-        if current_layer != first_cpu_layer: # If there is only one CPU layer, no need to prefetch
-            # Set up pre-hook (wait for copy) and post-hook (offload) for the first CPU layer
-            first_cpu_layer.register_forward_pre_hook(self._create_wait_hook(), prepend=True) # Prepend to ensure wait runs before prefetch
-            # The last CPU layer prefetches the first CPU layer (forming a loop)
-            current_layer.register_forward_pre_hook(self._create_prefetch_hook(first_cpu_layer, self.cpu_tensors[first_name]))
+            current_layer.register_forward_pre_hook(self._create_wait_hook())
+            current_layer.register_forward_pre_hook(self._create_prefetch_hook(next_layer, self.cpu_tensors[name]))
+            
+            if name.endswith(".mlp.gate_proj") or name.endswith(".mlp.up_proj"):
+                current_layer.register_forward_pre_hook(self._create_draft_hook())
+            current_layer = next_layer
+            
+        current_layer.register_forward_pre_hook(self._create_wait_hook())
+        current_layer.register_forward_pre_hook(self._create_prefetch_hook(first_cpu_layer, self.cpu_tensors[first_name]))
+        
     
     def _cache_cpu_layers(self, model, device_map):
         """Moves CPU layers to pinned memory and creates GPU-shaped placeholders."""
@@ -131,14 +130,16 @@ class PrefetchOffloader:
                     c.copy_to(p.data, non_blocking=True)
                     if self.record_stream:
                         p.data.record_stream(torch.cuda.current_stream())
-            
-            # Run draft
-            # self.draft_model.postspec()
-
+        
         return hook
-
+    
+    def _create_draft_hook(self):
+        def hook(module, inputs):
+            self.draft_model.postspec()
+        return hook
+    
     def _create_wait_hook(self):
         """Waits for any pending async copies in self.stream to finish before forward execution."""
         def hook(module, inputs):
-            torch.cuda.current_stream().wait_stream(self.stream)
+            torch.cuda.synchronize() 
         return hook

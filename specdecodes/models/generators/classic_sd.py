@@ -80,8 +80,8 @@ class ClassicSDGeneratorBase(GeneratorBase):
             return sampled_token_id, None
         else:
             return None, sampled_token_id
-    
-    def _verify(self, tree, root_ind, logits, logits_processor, do_sample, skip_nodes=0):
+        
+    def _verify(self, tree, root_ind ,logits, logits_processor, do_sample,skip_nodes=0):
         # Obtain LLM sample logits
         # global_p = sample_token_method(logits, return_probs=True).squeeze(0).to(device='cpu') # remove batch dim
         global_p = self._sample_token(logits, logits_processor, do_sample, return_probs=True)
@@ -91,6 +91,7 @@ class ClassicSDGeneratorBase(GeneratorBase):
         sampled_tokens = torch.empty(0, dtype=torch.long, device='cpu')
         hidden_indices = torch.empty(0, dtype=torch.long, device='cpu')
         total_len = accept_len = 0
+        # bonus_token = None
         
         # Iterate through draft tree, verify each node
         node_data = tree.get_tree_data(skip_nodes=skip_nodes)
@@ -99,10 +100,13 @@ class ClassicSDGeneratorBase(GeneratorBase):
         children_inds = tree.get_children_indices(cur_ind)
         children_token_ids = token_ids[children_inds-skip_nodes]
         
+        if(children_inds.numel() == 0):
+            bonus_token = None
+            
         torch.cuda.synchronize() # synchronize before starting the loop
         while children_inds.numel() > 0:
             total_len += 1
-            dist = global_p[cur_ind].squeeze(0)  # (vocab_size,)
+            dist = global_p[cur_ind-skip_nodes].squeeze(0)  # (vocab_size,)
             accept_token_id, bonus_token = self._verify_step(dist, children_token_ids, logits_processor, do_sample)
             
             # if accept_token_id is not None, it means the token is in the children
@@ -117,11 +121,18 @@ class ClassicSDGeneratorBase(GeneratorBase):
                 # Stop on EOS
                 if accept_token_id == self.draft_model.eos_token_id:
                     break
-                
+
                 # Update
                 cur_ind = children_inds[children_token_ids == accept_token_id]
                 children_inds = tree.get_children_indices(cur_ind)
                 children_token_ids = token_ids[children_inds-skip_nodes]
+                # Stop if current index exceeds global_p shape
+                if (children_inds-skip_nodes).numel() == 0 :
+                    # logging.warning("No more children nodes to verify.")
+                    break
+                if (torch.min(children_inds-skip_nodes)).item() >= global_p.shape[0]:
+                    # logging.warning(f"Current index {cur_ind-skip_nodes} exceeds global_p shape {global_p.shape[0]}.")
+                    break
             
             # Reject token, break
             else:
@@ -130,17 +141,20 @@ class ClassicSDGeneratorBase(GeneratorBase):
         # Generate bonus token, don't generate if eos token is the last token
         if sampled_tokens.numel() == 0 or sampled_tokens[-1] != self.draft_model.eos_token_id:
             if bonus_token is None:
-                dist = global_p[cur_ind].squeeze(0)
+                # print(f"Bonus token is None")
+                dist = global_p[cur_ind-skip_nodes].squeeze(0)
                 if do_sample:
                     bonus_token = dist.multinomial(num_samples=1).squeeze(-1)
                 else:
                     bonus_token = dist.argmax()
             
             if bonus_token is not None:
+                # print(f"Bonus token is not None")
                 sampled_tokens = torch.cat([sampled_tokens, bonus_token.unsqueeze(0)])
                 hidden_indices = torch.cat([hidden_indices, cur_ind])
-                
+        
         return sampled_tokens.unsqueeze(0), hidden_indices, (total_len, accept_len)
+
 
     def _generate(
         self,
@@ -290,10 +304,10 @@ class ClassicSDGeneratorBase(GeneratorBase):
                 # * check stopping criteria
                 with nvtx.annotate("stopping criteria"):
                     for k in range(sampled_tokens.shape[1]):    
-                        finished = stopping_criteria(sampled_tokens[:, k:k+1], None).item()
+                        finished = stopping_criteria(sampled_tokens[:, 0:k+1], None).item()
                         if finished:
-                            input_ids = input_ids[:, :-(sampled_tokens.shape[1]-k-1)] if (sampled_tokens.shape[1]-k-1)>0 else input_ids
                             break
+                    finished = finished or bool(stopping_criteria(input_ids, None))
                     
         return input_ids
     
