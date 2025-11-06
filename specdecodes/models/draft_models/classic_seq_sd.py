@@ -2,8 +2,7 @@ import torch
 import torch.nn as nn
 import nvtx
 
-from ..utils.cpu_tree import Tree
-from .base import DraftModelBase, TreeData, TreeMaskCache
+from .base import DraftModelBase
 
     
 class ClassicSDDraftModel(DraftModelBase):

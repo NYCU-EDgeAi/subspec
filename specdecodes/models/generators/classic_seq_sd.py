@@ -6,7 +6,6 @@ import nvtx
 
 from .base import GeneratorBase
 from ..utils.mixin import SDProfilingMixin
-from ..utils.utils import DraftParams, invert_mask
 
 class ClassicSDGeneratorBase(GeneratorBase):
     def __init__(self, generator_kwargs, *model_args, **kwargs):
