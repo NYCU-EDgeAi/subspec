@@ -18,6 +18,7 @@ Then, install [PyTorch](https://pytorch.org/get-started/locally/) from the offic
 Install the rest of the base requirements:
 
 ```setup
+pip install "smolagents[toolkit]"
 pip install -r requirements.txt
 ```
 
