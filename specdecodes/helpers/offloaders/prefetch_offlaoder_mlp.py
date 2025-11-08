@@ -60,6 +60,11 @@ class PrefetchOffloader:
         self.record_stream = record_stream
         self.draft_model = draft_model
 
+        self.prefetch_stream = torch.cuda.Stream()
+        self.draft_stream    = torch.cuda.Stream()
+        self.copy_done_event  = torch.cuda.Event(blocking=False, interprocess=False)
+        self.draft_done_event = torch.cuda.Event(blocking=False, interprocess=False)
+
         self._cache_cpu_layers(model, device_map)
         assert model.model.embed_tokens.weight.device.type == "cuda"
 
@@ -82,21 +87,69 @@ class PrefetchOffloader:
             # p.data.copy_(c)
             c.copy_to(p.data)
 
+        i = 0
         current_layer = first_cpu_layer
-        for name in cpu_layer_order[1:]:
-            print(f"layer: {name}")
-            next_layer = find_child(model, name)
+        while i < len(cpu_layer_order) - 1:
+            # print(f"layer: {cpu_layer_order[i]}")
+            nxt = cpu_layer_order[i+1]
+            # check if nxt is an MLP gate_proj
+            if nxt.endswith(".mlp.gate_proj"):
+                # collect gate/up/down
+                prefix = nxt.split(".mlp.")[0] + ".mlp"
+                gate_name = nxt
+                up_name   = prefix + ".up_proj"
+                down_name = prefix + ".down_proj"
 
+                gate_mod = find_child(model, gate_name)
+                up_mod   = find_child(model, up_name)
+                down_mod = find_child(model, down_name)
+
+                mlp_modules = [
+                    (gate_mod, self.cpu_tensors[gate_name]),
+                    (up_mod,   self.cpu_tensors[up_name]),
+                    (down_mod, self.cpu_tensors[down_name]),
+                ]
+
+                # 1) prefetch gate/up/down in advance
+                current_layer.register_forward_pre_hook(self._create_wait_hook())
+                current_layer.register_forward_pre_hook(self._create_mlp_kickoff_hook(mlp_modules))
+
+                # create post hook for draft in o proj
+                # current_layer.register_forward_hook(self._create_draft_hook())
+                current_layer.register_forward_pre_hook(self._create_pre_draft_hook())
+
+                # 3) create wait hooks for gate/up/down
+                gate_mod.register_forward_pre_hook(self._create_wait_hook())
+                up_mod.register_forward_pre_hook(self._create_wait_hook())
+                down_mod.register_forward_pre_hook(self._create_wait_hook())
+
+                # 4) prefetch next layer's q projection
+                if i + 4 < len(cpu_layer_order):
+                    after_mlp_name = cpu_layer_order[i + 4]  # gate/up/down 之後的下一層
+                    after_mlp_mod  = find_child(model, after_mlp_name)
+                    current_layer.register_forward_pre_hook(
+                        self._create_prefetch_hook(after_mlp_mod, self.cpu_tensors[after_mlp_name])
+                    )
+
+                # skip gate/up/down, set current_layer to down 
+                current_layer = down_mod
+                i += 3  
+                continue
+
+            # non-MLP layer processing
+            next_layer = find_child(model, nxt)
             current_layer.register_forward_pre_hook(self._create_wait_hook())
-            current_layer.register_forward_pre_hook(self._create_prefetch_hook(next_layer, self.cpu_tensors[name]))
-            
-            if name.endswith(".mlp.gate_proj") or name.endswith(".mlp.up_proj"):
-                # current_layer.register_forward_pre_hook(self._create_draft_pre_hook())
-                current_layer.register_forward_hook(self._create_draft_hook())
+            current_layer.register_forward_pre_hook(
+                self._create_prefetch_hook(next_layer, self.cpu_tensors[nxt])
+            )
             current_layer = next_layer
-            
+            i += 1
+
         current_layer.register_forward_pre_hook(self._create_wait_hook())
-        current_layer.register_forward_pre_hook(self._create_prefetch_hook(first_cpu_layer, self.cpu_tensors[first_name]))
+        current_layer.register_forward_pre_hook(
+            self._create_prefetch_hook(first_cpu_layer, self.cpu_tensors[first_name])
+        )
+        
         
     
     def _cache_cpu_layers(self, model, device_map):
@@ -134,13 +187,8 @@ class PrefetchOffloader:
         
         return hook
     
-    def _create_draft_pre_hook(self):
+    def _create_pre_draft_hook(self):
         def hook(module, inputs):
-            self.draft_model.postspec()
-        return hook
-    
-    def _create_draft_hook(self):
-        def hook(module, inputs, output):
             self.draft_model.postspec()
         return hook
     
@@ -148,4 +196,28 @@ class PrefetchOffloader:
         """Waits for any pending async copies in self.stream to finish before forward execution."""
         def hook(module, inputs):
             torch.cuda.synchronize() 
+        return hook
+    
+    def _create_mlp_kickoff_hook(self, mlp_modules):
+        def hook(module, inputs):
+            # 1) 非同步拷貝 gate/up/down
+            with torch.cuda.stream(self.stream):
+                for submod, cpu_params in mlp_modules:
+                    for p, c in zip(get_tensors(submod), cpu_params):
+                        c.copy_to(p.data, non_blocking=True)
+                        if self.record_stream:
+                            p.data.record_stream(self.stream)
+        return hook
+
+    def _create_mlp_barrier_hook(self):
+        def hook(module, inputs):
+            s = torch.cuda.current_stream()
+            s.wait_event(self.copy_done_event)
+            s.wait_event(self.draft_done_event)
+        return hook
+
+    def _create_draft_hook(self):
+        def hook(module, inputs, output):
+            self.draft_model.postspec()
+                # self.draft_done_event.record(self.draft_stream)
         return hook

@@ -90,7 +90,6 @@ class SubSpecSDDraftModel(ClassicSDDraftModel):
     
     def init_postspec(self):
         self.postspec_count = 0
-        
     @torch.no_grad()
     def postspec(self):
         if not self.had_first_speculate:
@@ -109,4 +108,6 @@ class SubSpecSDDraftModel(ClassicSDDraftModel):
         Get the tree structure 
         """
         # Update the tree data and mask cache before returning
-        return torch.cat(self.token_ids, dim=-1)
+        token_ids = torch.cat(self.token_ids, dim=-1)
+        new_token_ids = token_ids[:, -self.postspec_count:]
+        return new_token_ids
