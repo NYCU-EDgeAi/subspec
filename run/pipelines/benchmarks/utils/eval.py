@@ -33,6 +33,8 @@ def run_common_eval(generator, tokenizer, past_key_values, draft_past_key_values
     
     # Evaluate dataset
     log_file = os.path.join(log_dir, f"0.jsonl")
+    if os.environ.get("DETAILED_ANALYSIS", "False") == "True":
+        detailed_log_file = os.path.join(log_dir, f"detailed_analysis.jsonl")
     tput_list, acc_rate_list, draft_time_list, target_time_list = [], [], [], []
     for idx, query in tqdm(enumerate(dataset), total=len(dataset), desc="Evaluating", leave=True):
         messages = [{"role": "user", "content": query}]
@@ -56,6 +58,12 @@ def run_common_eval(generator, tokenizer, past_key_values, draft_past_key_values
         with open(log_file, 'a+') as f:
             json.dump(exp_log, f, indent=4)
             f.write("\n")
+        if os.environ.get("DETAILED_ANALYSIS", "False") == "True":
+            detailed_data = getattr(generator, 'detaild_data', None)
+            with open(detailed_log_file, 'a+') as f:
+                # json.dump({"idx": idx, "detailed_data": detailed_data}, f, indent=4)
+                json.dump(detailed_data, f)
+                f.write("\n")
 
         if exp_log.get("tput", None) is not None:
             tput_list.append(exp_log.get("tput", 0))

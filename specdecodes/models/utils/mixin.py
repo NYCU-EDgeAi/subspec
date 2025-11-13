@@ -108,6 +108,12 @@ class SDProfilingMixin:
         
         self.verify_events.append((start_event, end_event))
         
+        if os.environ.get("DETAILED_ANALYSIS", "False") == "True":
+            draft_prob = getattr(self.draft_model, 'draft_prob', None)
+            self.detaild_data.append([draft_prob, accept_len])
+            # print(f"draft_prob: \n{draft_prob}")
+            # print(f"acc_len: {accept_len}")
+
         # tokenize id to text for visualization
         # nodes = list(preorder_iter(root))
         # for node in nodes:
@@ -183,7 +189,8 @@ class SDProfilingMixin:
         self.profile_data = {}
         self.sampled_count = 1 # assume first token is sampled (prefill stage)
         self.iter_count = 1 # assume first step is done (prefill stage)
-        
+        if os.environ.get("DETAILED_ANALYSIS", "False") == "True":
+            self.detaild_data = []
         self.exp_log = {}
         self.draft_events = []
         self.target_events = []

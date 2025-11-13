@@ -1,5 +1,6 @@
 import torch
 import nvtx
+import os
 
 from ..utils.cpu_tree import Tree
 from .classic_seq_sd import ClassicSDDraftModel
@@ -82,10 +83,17 @@ class SubSpecSDDraftModel(ClassicSDDraftModel):
         self.token_ids.append(sampled_token)
         self.cache_position = torch.arange(kv_len, kv_len+self.draft_params.topk_len, dtype=torch.long, device=device)
 
+        if os.environ.get("DETAILED_ANALYSIS", "False") == "True":
+            self.draft_prob = []
+            self.draft_prob.append(torch.max(sampled_probs[:, -1:]).cpu().item())
+
         # 6) Main loop
         for depth_i in range(self.draft_params.max_depth-1):
             self.speculate_once()
 
+        # if os.environ.get("DETAILED_ANALYSIS", "False") == "True":
+        #     print(f"draft_prob(after speculate): {self.draft_prob}")
+        #     print(f"length of draft prob: {len(self.draft_prob)}")
         return torch.cat(self.token_ids, dim=-1)
     
     def init_postspec(self):
