@@ -140,11 +140,6 @@ class SubSpecSDGeneratorBase(ClassicSDGeneratorBase):
                                                         )
                     sampled_tokens = sampled_tokens.to(input_ids.device)
                     del next_token_logits
-                
-                with nvtx.annotate("update kv-cache"):
-                    if self.cache_implementation == 'dynamic':
-                        past_key_values.crop(prev_kv_len + sampled_tokens.shape[1])
-                    past_key_values.seq_len += sampled_tokens.shape[1]
                     
                 # * update input_ids and cache_position
                 with nvtx.annotate("update data"):
@@ -153,12 +148,20 @@ class SubSpecSDGeneratorBase(ClassicSDGeneratorBase):
                 
                 # * check stopping criteria
                 with nvtx.annotate("stopping criteria"):
-                    # finished = stopping_criteria(input_ids, None).item()
+                    prune_tokens = 0
                     for k in range(sampled_tokens.shape[1]):    
                         finished = stopping_criteria(sampled_tokens[:, k:k+1], None).item()
                         if finished:
-                            input_ids = input_ids[:, :-(sampled_tokens.shape[1]-k-1)] if (sampled_tokens.shape[1]-k-1)>0 else input_ids
+                            prune_tokens = sampled_tokens.shape[1]-k-1
+                            input_ids = input_ids[:, :-prune_tokens] if prune_tokens > 0 else input_ids
                             break
+                                
+                with nvtx.annotate("update kv-cache"):
+                    if self.cache_implementation == 'dynamic':
+                        past_key_values.crop(prev_kv_len + sampled_tokens.shape[1])
+                    past_key_values.seq_len += sampled_tokens.shape[1]
+                    if finished:
+                        past_key_values.seq_len -= prune_tokens
                 
         return input_ids
     
