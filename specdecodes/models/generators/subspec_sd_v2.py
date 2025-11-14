@@ -148,19 +148,18 @@ class SubSpecSDGeneratorBase(ClassicSDGeneratorBase):
             position_offset = input_ids.shape[1] - 1
 
         with nvtx.annotate("decoding"):
-            finished = False
-            count = 0
-            post_count = 0
+            skip_count = 0
             regular_count = 0
 
+            finished = False
             is_prev_accepted = False
             hidden_indices_cache = None
             last_tree_size = 0
-            
+
             while not finished:
                 # * speculate only if not previous accepted
                 if is_prev_accepted:
-                    post_count += 1
+                    skip_count += 1
                     # print("----- Post-speculation -----")
                     skip_nodes = last_tree_size
                     cache_position = torch.arange(position_offset+last_tree_size, position_offset+tree.size(), dtype=torch.long, device=input_ids.device)
@@ -218,18 +217,22 @@ class SubSpecSDGeneratorBase(ClassicSDGeneratorBase):
                 
                 # * check stopping criteria
                 with nvtx.annotate("stopping criteria"):
+                    prune_tokens = 0
                     for k in range(sampled_tokens.shape[1]):    
                         finished = stopping_criteria(sampled_tokens[:, k:k+1], None).item()
                         if finished:
-                            input_ids = input_ids[:, :-(sampled_tokens.shape[1]-k-1)] if (sampled_tokens.shape[1]-k-1)>0 else input_ids
+                            prune_tokens = sampled_tokens.shape[1]-k-1
+                            input_ids = input_ids[:, :-prune_tokens] if prune_tokens > 0 else input_ids
                             break
                     
                 with nvtx.annotate("reorder kv"):
                     if not is_prev_accepted or finished:
                         past_key_values.reorder_cache_with_offset(hidden_indices_cache, offset=past_key_values.get_seq_length(), new_chunk_len=last_tree_size, dim=2)
                         past_key_values.seq_len += hidden_indices_cache.shape[0]
+                        if finished:
+                            past_key_values.seq_len -= prune_tokens
 
-        print("count:", count, "post_count:", post_count, "regular_count:", regular_count)      
+        print("skip_count:", skip_count, "regular_count:", regular_count)      
         return input_ids
     
 class SubSpecSDGenerator(SDProfilingMixin, SubSpecSDGeneratorBase):
