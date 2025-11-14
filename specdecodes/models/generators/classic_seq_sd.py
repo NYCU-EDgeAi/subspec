@@ -3,6 +3,7 @@ from transformers.generation.logits_process import LogitsProcessorList
 from transformers.generation.stopping_criteria import StoppingCriteria
 import logging
 import nvtx
+import torchaudio
 
 from .base import GeneratorBase
 from ..utils.mixin import SDProfilingMixin
@@ -12,8 +13,8 @@ class ClassicSDGeneratorBase(GeneratorBase):
         super().__init__(*model_args, **kwargs)
         self.prefill_chunk_size = generator_kwargs.get("prefill_chunk_size", None)
         
-    def _speculate(self, input_ids):
-        return self.draft_model.speculate(input_ids)
+    def _speculate(self, input_ids, *model_args, **kwargs):
+        return self.draft_model.speculate(input_ids, *model_args, **kwargs)
 
     def _tree_decoding(self, draft_ids, cache_position, past_key_values):
         # llm forward

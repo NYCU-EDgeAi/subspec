@@ -1,3 +1,4 @@
+import os
 import torch
 import nvtx
 
@@ -95,6 +96,9 @@ class SubSpecSDDraftModel(ClassicSDDraftModel):
             dtype=dtype,
             device=device,
         )
+        
+        if os.environ.get("DETAILED_ANALYSIS", "False") == "True":
+            self.draft_prob = [torch.max(sampled_probs[:, -1:]).cpu().item()]
 
         # 5) First update of tree_data and tree_mask_cache
         with nvtx.annotate("update tree_data & tree_mask", color="green"):

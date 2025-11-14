@@ -15,7 +15,7 @@ LOGLEVEL=INFO
 # NVTX_PROFILING=True
 NVTX_PROFILING=False  
 
-DETAILED_ANALYSIS=True
+DETAILED_ANALYSIS=False
 
 ###############################################################################
 # Construct command

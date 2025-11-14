@@ -45,7 +45,7 @@ class SubSpecSDDraftModel(ClassicSDDraftModel):
         return model
     
     @torch.no_grad()
-    def speculate(self, input_ids, **kwargs):
+    def speculate(self, input_ids, depth=None, **kwargs):
         self.had_first_speculate = True
         
         # 1) Obtain necessary parameters
@@ -53,6 +53,7 @@ class SubSpecSDDraftModel(ClassicSDDraftModel):
         batch_size, input_len = input_ids.shape
         assert batch_size == 1, "Only support batch_size=1 for now."
         assert input_len == 1, "Value of input_len should be 1, as this is the root node of the tree."
+        depth = depth if depth is not None else self.draft_params.max_depth
 
         # 2) Initialize kv_len & cache_position
         with nvtx.annotate("Initialize kv_len & cache_position"):
@@ -84,20 +85,17 @@ class SubSpecSDDraftModel(ClassicSDDraftModel):
         self.cache_position = torch.arange(kv_len, kv_len+self.draft_params.topk_len, dtype=torch.long, device=device)
 
         if os.environ.get("DETAILED_ANALYSIS", "False") == "True":
-            self.draft_prob = []
-            self.draft_prob.append(torch.max(sampled_probs[:, -1:]).cpu().item())
+            self.draft_prob = [torch.max(sampled_probs[:, -1:]).cpu().item()]
 
         # 6) Main loop
-        for depth_i in range(self.draft_params.max_depth-1):
+        for depth_i in range(depth-1):
             self.speculate_once()
 
-        # if os.environ.get("DETAILED_ANALYSIS", "False") == "True":
-        #     print(f"draft_prob(after speculate): {self.draft_prob}")
-        #     print(f"length of draft prob: {len(self.draft_prob)}")
         return torch.cat(self.token_ids, dim=-1)
     
     def init_postspec(self):
         self.postspec_count = 0
+        
     @torch.no_grad()
     def postspec(self):
         if not self.had_first_speculate:

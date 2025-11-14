@@ -73,8 +73,10 @@ class ClassicSDDraftModel(DraftModelBase):
         with nvtx.annotate("sample nodes", color="green"):
             sampled_token = torch.argmax(sampled_probs[:, -1, :], dim=-1, keepdim=True)
             token_ids.append(sampled_token)
+            
         if os.environ.get("DETAILED_ANALYSIS", "False") == "True":
             self.draft_prob.append(torch.max(sampled_probs[:, -1, :]).cpu().item())
+            
         # Update internal state
         self.token_ids = token_ids
         self.cache_position += 1
