@@ -1,6 +1,9 @@
 from ..base_recipe import QuantOffloadRecipe
 from hqq.core.quantize import *
 from ...quantizers.hqq import HqqQuantizer
+# from sinq.sinqlinear import BaseQuantizeConfig
+# from ...quantizers.sinq import SINQQuantizer
+from ...offloaders.offloader import Offloader
 from ...offloaders.prefetch_offloader_v5 import PrefetchOffloader
 
 
@@ -17,6 +20,9 @@ class Recipe(QuantOffloadRecipe):
         attn_quant_config = BaseQuantizeConfig(nbits=4, group_size=64, axis=1)
         mlp_quant_config = BaseQuantizeConfig(nbits=4, group_size=64, axis=1)
         
+        # attn_quant_config = BaseQuantizeConfig(nbits=4, group_size=64, tiling_mode="1D", method="sinq")
+        # mlp_quant_config = BaseQuantizeConfig(nbits=4, group_size=64, tiling_mode="1D", method="sinq")
+
         layer_cnt = len(target_model.model.layers)
         quant_start = 0
         quant_end = layer_cnt

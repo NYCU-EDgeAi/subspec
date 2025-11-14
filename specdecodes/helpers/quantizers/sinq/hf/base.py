@@ -443,7 +443,8 @@ class BaseSINQModel:
         cls.setup_model(model)
 
         # AWQ
-        if 'awq' in quant_config['weight_quant_params']['method']:
+        # first check if quant_config has key 'weight_quant_params' and if its method is 'awq'
+        if 'weight_quant_params' in quant_config and 'awq' in quant_config['weight_quant_params']['method']:
             print('computing awq calibration activations')
             # calibration_data = get_calib_dataset(data="pileval", tokenizer=tokenizer,
             #                                      n_samples=128, block_size=512)
