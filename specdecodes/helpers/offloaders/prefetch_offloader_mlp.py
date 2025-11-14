@@ -137,7 +137,7 @@ class PrefetchOffloader:
             current_layer = next_layer
             i += 1
             
-            print("prefetch non-MLP:", name)
+            # print("prefetch non-MLP:", name)
             
 
         current_layer.register_forward_pre_hook(self._create_wait_hook())
@@ -145,7 +145,7 @@ class PrefetchOffloader:
             self._create_prefetch_hook(first_cpu_layer, self.cpu_tensors[first_name])
         )
         
-        print("prefetch loop back to first layer:", first_name)
+        # print("prefetch loop back to first layer:", first_name)
         
         
     
