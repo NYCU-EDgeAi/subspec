@@ -11,6 +11,37 @@ from concurrent.futures import ThreadPoolExecutor, wait, FIRST_EXCEPTION
 
 
 class SubSpecSDGeneratorBase(ClassicSDGeneratorBase):
+    def _draft_tree_decoding(self, tree, tree_mask, past_key_values, position_offset, cache_position, skip_nodes, device):
+        # Preparing draft_model's tree decoding data, also updates each node's index (node.ind).
+        with nvtx.annotate("create attn mask"):
+            node_data = tree.get_tree_data(skip_nodes)
+            tree_input_ids = node_data['token_ids']
+            tree_position_ids = node_data['depths'] + position_offset
+            tree_mask_partial = tree.create_attention_mask(position_offset, skip_nodes)
+          
+        # Move to device
+        with nvtx.annotate("mask to GPU"):
+            tree_input_ids = tree_input_ids.to(device)
+            tree_position_ids = tree_position_ids.to(device)
+            tree_mask_partial = tree_mask_partial.to(device)
+        
+        # Assing to tree mask
+        with nvtx.annotate("update mask"):
+            tree_mask = self._update_tree_mask(tree_mask, tree_mask_partial)
+            tree_mask = invert_mask(tree_mask, dtype=self.draft_model.model.dtype)
+        
+        # draft_model llm forward
+        with nvtx.annotate("draft llm forward", color="red"):
+            # print("cache_position:", cache_position)
+            next_token_logits = self.draft_model(
+                tree_input_ids.unsqueeze(0),
+                past_key_values=past_key_values.cache,
+                attention_mask=tree_mask,
+                position_ids=tree_position_ids.unsqueeze(0),
+                cache_position=cache_position
+            )
+        return next_token_logits
+    
     def _tree_decoding(self, tree, tree_mask, past_key_values, position_offset, cache_position, skip_nodes, device):
         # Preparing target_model's tree decoding data, also updates each node's index (node.ind).
         with nvtx.annotate("create attn mask"):
@@ -155,29 +186,74 @@ class SubSpecSDGeneratorBase(ClassicSDGeneratorBase):
             is_prev_accepted = False
             hidden_indices_cache = None
             last_tree_size = 0
+            last_tree_depth = 0
 
             while not finished:
                 # * speculate only if not previous accepted
                 if is_prev_accepted:
                     skip_count += 1
-                    # print("----- Post-speculation -----")
+                    print("----- Post-speculation -----")
                     skip_nodes = last_tree_size
+                    # cache_position = torch.arange(position_offset+last_tree_size, position_offset+tree.size(), dtype=torch.long, device=input_ids.device)
+                    # last_tree_size = tree.size()
+                    # last_tree_depth = tree.get_depth()
+                    
+                    print("----- Post-verify -----")
+                    # print("prev_tree_depth:", last_tree_depth, "cur_tree_depth:", tree.get_depth())
+                    d_cache_position = torch.arange(position_offset+last_tree_size, position_offset+tree.size(), dtype=torch.long, device=input_ids.device)
+                    next_token_logits = self._draft_tree_decoding(tree, tree_mask, past_key_values, position_offset=position_offset, cache_position=d_cache_position, skip_nodes=skip_nodes, device=input_ids.device)
+                    sampled_tokens, _, (total_len, sampled_len) = self._verify(
+                                                            tree, root_ind, next_token_logits, 
+                                                            logits_processor,
+                                                            False, 
+                                                            skip_nodes=skip_nodes,
+                                                        )
+                    
+                    # print("Speculative tree before prune:")
+                    # tree.print(tokenizer=self.tokenizer)
+                    # print(f"pv-sampled_tokens ({sampled_tokens.shape}):", self.tokenizer.batch_decode(sampled_tokens.squeeze(0)))
+                    # print("tree depth before prune:", tree.get_depth())
+                    
+                    print("----- Prune tree -----")
+                    keep_tokens = sampled_tokens.size(1)-1  # exclude bonus token
+                    tree.prune_to_depth(last_tree_depth+keep_tokens+1)
+                    # print("pruned to depth:", last_tree_depth+keep_tokens+1)
+                    # print("tree depth after prune:", tree.get_depth())
+                    
+                    # print("Speculative tree after prune:")
+                    # tree.print(tokenizer=self.tokenizer)
+                    
+                    # # speculate to refill the tree
+                    # refill_steps = self.draft_params.max_depth - keep_tokens
+                    # print(f"refill_steps: {refill_steps}")
+                    # if refill_steps > 0:
+                    #     print("----- Refill tree -----")
+                    #     with nvtx.annotate("post speculate", color="cyan"):
+                    #         self.draft_model.init_postspec()
+                    #         for _ in range(refill_steps):
+                    #             self.draft_model.postspec()
+                    #     tree = self.draft_model.update_tree_after_post()
+                    # print("tree depth after refill:", tree.get_depth())
+                    
                     cache_position = torch.arange(position_offset+last_tree_size, position_offset+tree.size(), dtype=torch.long, device=input_ids.device)
                     last_tree_size = tree.size()
+                    last_tree_depth = tree.get_depth()
 
                 else:
                     regular_count += 1
-                    # print("----- Regular speculation -----")
+                    print("----- Regular speculation -----")
                     last_token_id = sampled_tokens[:, -1:].clone(memory_format=torch.contiguous_format)
                     with nvtx.annotate("speculate", color="cyan"):
                         tree = self._speculate(last_token_id)
                     last_tree_size = tree.size()
+                    last_tree_depth = tree.get_depth()
                     
                     skip_nodes = 0
                     position_offset = input_ids.shape[1] - 1
                     cache_position = torch.arange(position_offset, position_offset+tree.size(), dtype=torch.long, device=input_ids.device)
                         
                 # * tree decoding
+                print("----- Verify -----")
                 with nvtx.annotate("tree_decoding", color="orange"):
                     self.draft_model.init_postspec()
                     outputs = self._tree_decoding(tree, tree_mask, past_key_values, position_offset=position_offset, cache_position=cache_position, skip_nodes=skip_nodes, device=input_ids.device)

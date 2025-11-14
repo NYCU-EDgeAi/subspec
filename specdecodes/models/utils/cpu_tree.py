@@ -115,6 +115,62 @@ class Tree:
             self.nodes.extend(new_nodes)
             self.current_size += len(new_nodes)
             self.available_leaves = new_leaves
+    
+    def prune_to_depth(self, max_depth: int) -> torch.Tensor:
+        """
+        Keep only nodes with depth < max_depth (remove depth >= max_depth).
+        Returns a 1-D LongTensor of the kept *original* indices.
+        """
+        if max_depth < 0:
+            raise ValueError("max_depth must be >= 0")
+        if self.current_size == 0:
+            return torch.empty(0, dtype=torch.long)
+
+        current_max_depth = max(node.depth for node in self.nodes)
+        if max_depth > current_max_depth:
+            return torch.arange(self.current_size, device='cpu')
+
+        keep_list = [i for i, node in enumerate(self.nodes) if node.depth <= max_depth]
+        if len(keep_list) == self.current_size:
+            return torch.arange(self.current_size, device='cpu')
+
+        old2new = {old_i: new_i for new_i, old_i in enumerate(keep_list)}
+        new_nodes: List[TreeNode] = []
+
+        for old_i in keep_list:
+            o_node = self.nodes[old_i]
+            new_parent = (
+                old2new[o_node.parent]
+                if (o_node.parent is not None and o_node.parent in old2new)
+                else None
+            )
+            n_node = TreeNode(
+                parent=new_parent,
+                token_id=o_node.token_id,
+                cumulative_probability=o_node.cumulative_probability,
+                depth=o_node.depth
+            )
+            n_node.has_been_sampled = o_node.has_been_sampled
+            new_nodes.append(n_node)
+
+        # Reconnect children
+        for new_i, old_i in enumerate(keep_list):
+            for c_old in self.nodes[old_i].children:
+                if c_old in old2new:
+                    new_nodes[new_i].children.append(old2new[c_old])
+
+        # Commit
+        self.nodes = new_nodes
+        self.current_size = len(new_nodes)
+
+        # Reactivate all current leaves so they can be expanded again ---
+        is_parent = [bool(n.children) for n in self.nodes]
+        for i, n in enumerate(self.nodes):
+            if not is_parent[i]:
+                n.has_been_sampled = False  # make leaf expandable again
+
+        self.available_leaves = [i for i, n in enumerate(self.nodes) if not is_parent[i]]
+        return torch.tensor(keep_list, dtype=torch.long)
 
     def prune_to_top_n(self, n: int) -> torch.Tensor:
         if n == -1 or self.current_size <= n:
@@ -127,12 +183,10 @@ class Tree:
         _, keep_idx = torch.topk(probs, k=n, sorted=True)
         keep_list = keep_idx.tolist()
 
-        # Rebuild the nodes
         old2new = {old_i: new_i for new_i, old_i in enumerate(keep_list)}
         new_nodes = []
         for old_i in keep_list:
             o_node = self.nodes[old_i]
-            # parent might or might not be in keep_list:
             new_parent = old2new[o_node.parent] if o_node.parent in old2new else None
             n_node = TreeNode(
                 parent=new_parent,
@@ -143,7 +197,6 @@ class Tree:
             n_node.has_been_sampled = o_node.has_been_sampled
             new_nodes.append(n_node)
 
-        # Children references
         for new_i, old_i in enumerate(keep_list):
             for c in self.nodes[old_i].children:
                 if c in old2new:
@@ -151,12 +204,15 @@ class Tree:
 
         self.nodes = new_nodes
         self.current_size = len(new_nodes)
+
+        # Reactivate new leaves after pruning
         is_parent = [bool(n.children) for n in self.nodes]
-        self.available_leaves = [
-            i for i, node in enumerate(self.nodes)
-            if (not is_parent[i]) and (not node.has_been_sampled)
-        ]
-        return torch.tensor(keep_list, dtype=torch.long)
+        for i, n in enumerate(self.nodes):
+            if not is_parent[i]:
+                n.has_been_sampled = False
+
+        self.available_leaves = [i for i, n in enumerate(self.nodes) if not is_parent[i]]
+        return torch.tensor(keep_list, dtype=torch.long) 
     
     def get_node(self, node_index: int) -> TreeNode:
         if node_index < 0 or node_index >= self.current_size:
@@ -234,7 +290,7 @@ class Tree:
         am_tensor = am_tensor[skip_nodes:, :]
         return am_tensor.unsqueeze(0).unsqueeze(0)
     
-    def print_tree_structure(self, show_token_id: bool = True, show_probability: bool = True, tokenizer=None):
+    def print(self, tokenizer=None, show_token_id: bool = True, show_probability: bool = True):
         if not (show_token_id or show_probability):
             raise ValueError("At least one of 'show_token_id' or 'show_probability' must be True.")
 
@@ -270,4 +326,4 @@ class Tree:
         recurse(0)
 
     def __repr__(self):
-        return f"LinkedCPUTree(num_nodes={self.current_size}, device='cpu')"
+        return f"Tree(num_nodes={self.current_size}, device='cpu')"
