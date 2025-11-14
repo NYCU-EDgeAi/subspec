@@ -2,7 +2,7 @@ from ..base_recipe import QuantOffloadRecipe
 from hqq.core.quantize import *
 from ...quantizers.hqq import HqqQuantizer
 # from ...offloaders.prefetch_offloader_postspec import PrefetchOffloader
-from ...offloaders.prefetch_offlaoder_mlp import PrefetchOffloader
+from ...offloaders.prefetch_offloader_mlp import PrefetchOffloader
 
 
 class Recipe(QuantOffloadRecipe):

@@ -37,12 +37,6 @@ class SubSpecSDBuilder(GeneratorPipelineBuilder):
             max_depth=16,
             topk_len=1,
         )
-
-        self.post_draft_params = DraftParams(
-            temperature=1,
-            max_depth=16,
-            topk_len=1,
-        )
         
         # Recipe for quantization and offloading.
         self.recipe = Recipe()
@@ -96,7 +90,6 @@ class SubSpecSDBuilder(GeneratorPipelineBuilder):
             tokenizer=tokenizer,
             draft_model=draft_model,
             draft_params=self.draft_params,
-            post_draft_params=self.post_draft_params,
             cache_implementation=self.cache_implementation,
             profiling=self.generator_profiling,
             profiling_verbose=self.profiling_verbose,

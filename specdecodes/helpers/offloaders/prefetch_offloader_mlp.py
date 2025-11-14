@@ -87,25 +87,26 @@ class PrefetchOffloader:
             # p.data.copy_(c)
             c.copy_to(p.data)
 
-        i = 0
+        i = 1
         current_layer = first_cpu_layer
-        while i < len(cpu_layer_order) - 1:
-            # print(f"layer: {cpu_layer_order[i]}")
-            nxt = cpu_layer_order[i+1]
-            # check if nxt is an MLP gate_proj
-            if nxt.endswith(".mlp.gate_proj"):
+        while i < len(cpu_layer_order):
+            name = cpu_layer_order[i]
+            next_layer = find_child(model, name)
+            
+            # check if next layer is an MLP gate_proj  (current_layer is self-attn o_proj)
+            if name.endswith(".mlp.up_proj"):
                 # collect gate/up/down
-                prefix = nxt.split(".mlp.")[0] + ".mlp"
-                gate_name = nxt
+                prefix = name.split(".mlp.")[0] + ".mlp"
+                # gate_name = name
                 up_name   = prefix + ".up_proj"
                 down_name = prefix + ".down_proj"
 
-                gate_mod = find_child(model, gate_name)
+                # gate_mod = find_child(model, gate_name)
                 up_mod   = find_child(model, up_name)
                 down_mod = find_child(model, down_name)
 
                 mlp_modules = [
-                    (gate_mod, self.cpu_tensors[gate_name]),
+                    # (gate_mod, self.cpu_tensors[gate_name]),
                     (up_mod,   self.cpu_tensors[up_name]),
                     (down_mod, self.cpu_tensors[down_name]),
                 ]
@@ -113,42 +114,38 @@ class PrefetchOffloader:
                 # 1) prefetch gate/up/down in advance
                 current_layer.register_forward_pre_hook(self._create_wait_hook())
                 current_layer.register_forward_pre_hook(self._create_mlp_kickoff_hook(mlp_modules))
+                # print("prefetch MLP:", gate_name, up_name, down_name)
 
                 # create post hook for draft in o proj
-                # current_layer.register_forward_hook(self._create_draft_hook())
-                current_layer.register_forward_pre_hook(self._create_pre_draft_hook())
+                current_layer.register_forward_hook(self._create_draft_hook())
+                # current_layer.register_forward_pre_hook(self._create_pre_draft_hook(), prepend=False)
 
                 # 3) create wait hooks for gate/up/down
-                gate_mod.register_forward_pre_hook(self._create_wait_hook())
+                # gate_mod.register_forward_pre_hook(self._create_wait_hook())
                 up_mod.register_forward_pre_hook(self._create_wait_hook())
                 down_mod.register_forward_pre_hook(self._create_wait_hook())
+                # print("wait MLP:", gate_name, up_name)
 
-                # 4) prefetch next layer's q projection
-                if i + 4 < len(cpu_layer_order):
-                    after_mlp_name = cpu_layer_order[i + 4]  # gate/up/down 之後的下一層
-                    after_mlp_mod  = find_child(model, after_mlp_name)
-                    current_layer.register_forward_pre_hook(
-                        self._create_prefetch_hook(after_mlp_mod, self.cpu_tensors[after_mlp_name])
-                    )
-
-                # skip gate/up/down, set current_layer to down 
+                # skip gate/up, set current_layer to down
                 current_layer = down_mod
-                i += 3  
+                i += 2
                 continue
 
             # non-MLP layer processing
-            next_layer = find_child(model, nxt)
             current_layer.register_forward_pre_hook(self._create_wait_hook())
-            current_layer.register_forward_pre_hook(
-                self._create_prefetch_hook(next_layer, self.cpu_tensors[nxt])
-            )
+            current_layer.register_forward_pre_hook(self._create_prefetch_hook(next_layer, self.cpu_tensors[name]))
             current_layer = next_layer
             i += 1
+            
+            print("prefetch non-MLP:", name)
+            
 
         current_layer.register_forward_pre_hook(self._create_wait_hook())
         current_layer.register_forward_pre_hook(
             self._create_prefetch_hook(first_cpu_layer, self.cpu_tensors[first_name])
         )
+        
+        print("prefetch loop back to first layer:", first_name)
         
         
     

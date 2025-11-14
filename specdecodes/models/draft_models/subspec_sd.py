@@ -127,7 +127,7 @@ class SubSpecSDDraftModel(ClassicSDDraftModel):
         if not self.had_first_speculate:
                 #print("Post speculate before first speculate, skip.")
                 pass
-        elif self.postspec_count >(self.post_draft_params.max_depth - 1):
+        elif self.postspec_count > (self.draft_params.max_depth - 1):
                 #print("Post speculate reached max depth, skip.")
                 pass
         else:

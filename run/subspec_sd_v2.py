@@ -18,10 +18,10 @@ class SubSpecSDBuilder(GeneratorPipelineBuilder):
         self.seed = 0
         self.device = "cuda:0"
         self.dtype = torch.float16
-        self.max_length = 2048
+        self.max_length = 10*1024
         
         # Model paths.
-        self.llm_path = "meta-llama/Llama-3.1-8B-Instruct"
+        self.llm_path = "Qwen/Qwen3-8B"
         
         # Generation parameters.
         self.do_sample = False
@@ -29,15 +29,9 @@ class SubSpecSDBuilder(GeneratorPipelineBuilder):
         
         # Generator-specific configurations.
         self.generator_kwargs = {
-            "prefill_chunk_size": 256,
+            "prefill_chunk_size": 4096,
         }
         self.draft_params = DraftParams(
-            temperature=0.2,
-            max_depth=4,
-            topk_len=6,
-        )
-        
-        self.post_draft_params = DraftParams(
             temperature=0.2,
             max_depth=16,
             topk_len=6,
@@ -95,7 +89,6 @@ class SubSpecSDBuilder(GeneratorPipelineBuilder):
             tokenizer=tokenizer,
             draft_model=draft_model,
             draft_params=self.draft_params,
-            post_draft_params=self.post_draft_params,
             cache_implementation=self.cache_implementation,
             profiling=self.generator_profiling,
             profiling_verbose=self.profiling_verbose,

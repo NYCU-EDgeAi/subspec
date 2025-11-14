@@ -11,14 +11,6 @@ from concurrent.futures import ThreadPoolExecutor, wait, FIRST_EXCEPTION
 
 
 class SubSpecSDGeneratorBase(ClassicSDGeneratorBase):
-    def __init__(self, generator_kwargs, *model_args, **kwargs):
-        super().__init__(generator_kwargs, *model_args, **kwargs)
-        post_draft_params = kwargs.get("post_draft_params", None)
-        if post_draft_params is None:
-           raise ValueError("post_draft_params must be provided in subspec_sd_v2 generator.")
-        self.post_draft_params = post_draft_params
-        self.draft_model.post_draft_params = post_draft_params
-        
     def _tree_decoding(self, tree, tree_mask, past_key_values, position_offset, cache_position, skip_nodes, device):
         # Preparing target_model's tree decoding data, also updates each node's index (node.ind).
         with nvtx.annotate("create attn mask"):
@@ -112,7 +104,7 @@ class SubSpecSDGeneratorBase(ClassicSDGeneratorBase):
         # * prefill stage
         with nvtx.annotate("chunked prefill", color="orange"):
             tree_mask = self._init_tree_mask(
-                self.draft_params.max_verify_tokens+self.post_draft_params.max_verify_tokens, max_cache_len, device=input_ids.device
+                self.draft_params.max_verify_tokens*2, max_cache_len, device=input_ids.device
             )
             current_kv_len = past_key_values.get_seq_length()
             prefill_tokens = input_ids[:, current_kv_len:]
@@ -153,12 +145,7 @@ class SubSpecSDGeneratorBase(ClassicSDGeneratorBase):
 
         with nvtx.annotate("update data"):
             input_ids = torch.cat([input_ids, sampled_tokens], dim=-1)
-            position_offset = input_ids.shape[1]-1
-            cache_position = torch.arange(org_input_len, org_input_len+self.draft_params.max_verify_tokens, dtype=torch.long, device=input_ids.device)
-
-        with nvtx.annotate("speculate", color="cyan"):
-            last_token_id = sampled_tokens[:, -1:].clone(memory_format=torch.contiguous_format)
-            tree = self._speculate(last_token_id)
+            position_offset = input_ids.shape[1] - 1
 
         with nvtx.annotate("decoding"):
             finished = False
@@ -166,31 +153,45 @@ class SubSpecSDGeneratorBase(ClassicSDGeneratorBase):
             post_count = 0
             regular_count = 0
 
-            accept_post_tree = False
-            sampled_tokens_cache = None
+            is_prev_accepted = False
             hidden_indices_cache = None
             last_tree_size = 0
+            
             while not finished:
+                # * speculate only if not previous accepted
+                if is_prev_accepted:
+                    post_count += 1
+                    # print("----- Post-speculation -----")
+                    skip_nodes = last_tree_size
+                    cache_position = torch.arange(position_offset+last_tree_size, position_offset+tree.size(), dtype=torch.long, device=input_ids.device)
+                    last_tree_size = tree.size()
+
+                else:
+                    regular_count += 1
+                    # print("----- Regular speculation -----")
+                    last_token_id = sampled_tokens[:, -1:].clone(memory_format=torch.contiguous_format)
+                    with nvtx.annotate("speculate", color="cyan"):
+                        tree = self._speculate(last_token_id)
+                    last_tree_size = tree.size()
+                    
+                    skip_nodes = 0
+                    position_offset = input_ids.shape[1] - 1
+                    cache_position = torch.arange(position_offset, position_offset+tree.size(), dtype=torch.long, device=input_ids.device)
+                        
                 # * tree decoding
                 with nvtx.annotate("tree_decoding", color="orange"):
-                    
-                    skip_nodes = last_tree_size if accept_post_tree else 0
                     self.draft_model.init_postspec()
-                    
                     outputs = self._tree_decoding(tree, tree_mask, past_key_values, position_offset=position_offset, cache_position=cache_position, skip_nodes=skip_nodes, device=input_ids.device)
                     next_token_logits = outputs.logits
-                    tem_tree_size = tree.size()
                 
                 with nvtx.annotate("update_post_tree", color="cyan"):
                     tree = self.draft_model.update_tree_after_post()
                 
                 # * verify
-                with nvtx.annotate("verify"): 
-                    skip_nodes = last_tree_size if accept_post_tree else 0
-                    root_ind = root_ind if accept_post_tree else 0
-                    
+                with nvtx.annotate("verify"):
+                    root_ind = root_ind if is_prev_accepted else 0
                     sampled_tokens, hidden_indices, (total_len, sampled_len) = self._verify(
-                                                            tree, root_ind ,next_token_logits, 
+                                                            tree, root_ind, next_token_logits, 
                                                             logits_processor,
                                                             do_sample, 
                                                             skip_nodes=skip_nodes,
@@ -201,55 +202,34 @@ class SubSpecSDGeneratorBase(ClassicSDGeneratorBase):
                     sampled_tokens = sampled_tokens.to(input_ids.device)
                     hidden_indices = hidden_indices.to(input_ids.device)
 
-                    if accept_post_tree:
-                        sampled_tokens_cache = torch.cat([sampled_tokens_cache, sampled_tokens], dim=-1)
+                    if is_prev_accepted:
                         hidden_indices_cache = torch.cat([hidden_indices_cache, hidden_indices], dim=-1)
                     else:
-                        sampled_tokens_cache = sampled_tokens
                         hidden_indices_cache = hidden_indices
-
-                # print(f"Current sampled ({sampled_tokens_cache.shape[1]}):", self.tokenizer.batch_decode(sampled_tokens_cache.squeeze(0), skip_special_tokens=False))
-                
-                last_tree_size = tem_tree_size                
+               
                 root_ind = tree.find_child_index(last_accepted_ind, bonus_token)
-                
-                if root_ind is not None:
-                    accept_post_tree = True 
+                if root_ind >= 0:
+                    is_prev_accepted = True
                 else:
-                    accept_post_tree = False 
+                    is_prev_accepted = False
 
-                if (sampled_tokens_cache.shape[1]>100):
-                    accept_post_tree = False 
+                # print("sampled_tokens:", self.tokenizer.batch_decode(sampled_tokens.squeeze(0)))
+                input_ids = torch.cat([input_ids, sampled_tokens], dim=-1)
                 
                 # * check stopping criteria
                 with nvtx.annotate("stopping criteria"):
-                    finished = stopping_criteria(sampled_tokens_cache, None).item()
-
+                    for k in range(sampled_tokens.shape[1]):    
+                        finished = stopping_criteria(sampled_tokens[:, k:k+1], None).item()
+                        if finished:
+                            input_ids = input_ids[:, :-(sampled_tokens.shape[1]-k-1)] if (sampled_tokens.shape[1]-k-1)>0 else input_ids
+                            break
+                    
                 with nvtx.annotate("reorder kv"):
-                    count += 1
-                    if finished:
-                        input_ids = torch.cat([input_ids, sampled_tokens_cache], dim=-1)
-                    elif not accept_post_tree:
-                        # print("reject post tree,re speculate")
-                        regular_count += 1
+                    if not is_prev_accepted or finished:
                         past_key_values.reorder_cache_with_offset(hidden_indices_cache, offset=past_key_values.get_seq_length(), new_chunk_len=last_tree_size, dim=2)
                         past_key_values.seq_len += hidden_indices_cache.shape[0]
-                        input_ids = torch.cat([input_ids, sampled_tokens_cache], dim=-1)
-                        
-                        with nvtx.annotate("speculate", color="cyan"):
-                            last_token_id = sampled_tokens[:, -1:].clone(memory_format=torch.contiguous_format)
-                            tree = self._speculate(last_token_id)
-                            last_tree_size = tree.size()
 
-                        position_offset = input_ids.shape[1] - 1
-                        cache_position = torch.arange(input_ids.shape[1]-1, input_ids.shape[1]-1+tree.size(), dtype=torch.long, device=input_ids.device)
-                    else:  
-                        # print("accept post tree")
-                        post_count += 1
-                        position_offset = input_ids.shape[1] - 1 
-                        cache_position = torch.arange(input_ids.shape[1]+last_tree_size -1, input_ids.shape[1]+tree.size()-1, dtype=torch.long, device=input_ids.device)                     
-                        
-        print("count:", count, "post_count:", post_count, "regular_count:", regular_count)        
+        print("count:", count, "post_count:", post_count, "regular_count:", regular_count)      
         return input_ids
     
 class SubSpecSDGenerator(SDProfilingMixin, SubSpecSDGeneratorBase):

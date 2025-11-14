@@ -177,7 +177,7 @@ class Tree:
         for child_index in self.nodes[node_index].children:
             if self.nodes[child_index].token_id == match_token_id:
                 return child_index
-        return None
+        return -1
 
     def get_tree_data(self, skip_nodes=0) -> Dict[str, torch.Tensor]:
         t_ids, probs, depths, parents = [], [], [], []
