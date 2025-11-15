@@ -29,7 +29,7 @@ class ClassicSDGeneratorBase(GeneratorBase):
             
         return tree_mask
 
-    def _update_tree_mask(self, tree_mask, tree_mask_partial):
+    def _get_tree_mask(self, tree_mask_partial):
         if self.tree_mask_update_method == 'static':
             # Avoid prints in hot path; use logging if needed.
             _, _, K, D = tree_mask_partial.shape
@@ -43,7 +43,7 @@ class ClassicSDGeneratorBase(GeneratorBase):
         else:
             return tree_mask_partial
 
-    def _tree_decoding(self, tree, tree_mask, past_key_values, position_offset, cache_position, device):
+    def _tree_decoding(self, tree, past_key_values, position_offset, cache_position, device):
         # Preparing target_model's tree decoding data, also updates each node's index (node.ind).
         with nvtx.annotate("create attn mask"):
             node_data = tree.get_tree_data()
@@ -58,8 +58,8 @@ class ClassicSDGeneratorBase(GeneratorBase):
             tree_mask_partial = tree_mask_partial.to(device)
         
         # Assing to tree mask
-        with nvtx.annotate("update mask"):
-            tree_mask = self._update_tree_mask(tree_mask, tree_mask_partial)
+        with nvtx.annotate("get mask"):
+            tree_mask = self._get_tree_mask(tree_mask_partial)
             tree_mask = invert_mask(tree_mask, dtype=self.target_model.model.dtype)
         
         # llm forward
