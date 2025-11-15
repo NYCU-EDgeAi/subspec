@@ -60,12 +60,10 @@ def run_agent_eval(generator, tokenizer, past_key_values, draft_past_key_values,
             draft_time_list.append(exp_log.get("avg_draft_time", 0))
         if exp_log.get("avg_target_time", None) is not None:
             target_time_list.append(exp_log.get("avg_target_time", 0))
-        
-        # log spec_skip/regular count
-        if hasattr(generator, 'spec_skip_count') and generator.spec_skip_count is not None:
-            logging.info(f"Skip count: {generator.spec_skip_count}, Regular count: {generator.regular_count}")
-            skip_spec_count_list.append(generator.spec_skip_count)
-            regular_count_list.append(generator.regular_count)
+        if exp_log.get("skip_spec_count", None) is not None:
+            skip_spec_count_list.append(exp_log.get("skip_spec_count", 0))
+        if exp_log.get("regular_count", None) is not None:
+            regular_count_list.append(exp_log.get("regular_count", 0))
             
         gc.collect()
         torch.cuda.empty_cache()
@@ -82,7 +80,7 @@ def run_agent_eval(generator, tokenizer, past_key_values, draft_past_key_values,
     print(f"\tAverage Draft Time: {avg_draft_time:.3f} sec")
     print(f"\tAverage Target Time: {avg_target_time:.3f} sec")
     print(f"\tPeak Memory: {peak_mem:.3f} GiB")
-    if hasattr(generator, 'spec_skip_count') and generator.spec_skip_count is not None:
+    if hasattr(generator, 'skip_spec_count') and generator.skip_spec_count is not None:
         print(f"\tSkip Speculation Rate: {skip_spec_rate:.3f}")
     
     # return tput_mean, tput_std, tacc_mean, tacc_std, avg_draft_time, avg_target_time, peak_mem
@@ -93,5 +91,5 @@ def run_agent_eval(generator, tokenizer, past_key_values, draft_past_key_values,
         "avg_draft_time": float(avg_draft_time),
         "avg_target_time": float(avg_target_time),
         "peak_memory_gib": float(peak_mem),
-        "skip_spec_rate": float(skip_spec_rate) if hasattr(generator, 'spec_skip_count') and generator.spec_skip_count is not None else 0,
+        "skip_spec_rate": float(skip_spec_rate) if hasattr(generator, 'skip_spec_count') and generator.skip_spec_count is not None else 0,
     }

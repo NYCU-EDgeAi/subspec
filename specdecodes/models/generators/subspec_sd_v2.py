@@ -215,7 +215,7 @@ class SubSpecSDGeneratorBase(ClassicSDGeneratorBase):
             position_offset = input_ids.shape[1] - 1
 
         with nvtx.annotate("decoding"):
-            self.spec_skip_count = 0
+            self.skip_spec_count = 0
             self.regular_count = 0
 
             finished = False
@@ -227,7 +227,7 @@ class SubSpecSDGeneratorBase(ClassicSDGeneratorBase):
             while not finished:
                 # * speculate only if not previous accepted
                 if is_prev_accepted:
-                    self.spec_skip_count += 1
+                    self.skip_spec_count += 1
                     # print("----- Post-speculation -----")
                     skip_nodes = last_tree_size
                     cache_position = torch.arange(position_offset+last_tree_size, position_offset+tree.size(), dtype=torch.long, device=input_ids.device)
@@ -307,7 +307,7 @@ class SubSpecSDGeneratorBase(ClassicSDGeneratorBase):
                         if finished:
                             past_key_values.seq_len -= prune_tokens
 
-        print("spec_skip_count:", self.spec_skip_count, "regular_count:", self.regular_count)      
+        print("skip_spec_count:", self.skip_spec_count, "regular_count:", self.regular_count)      
         return input_ids
     
 class SubSpecSDGenerator(SDProfilingMixin, SubSpecSDGeneratorBase):

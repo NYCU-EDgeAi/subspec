@@ -74,12 +74,10 @@ def run_common_eval(generator, tokenizer, past_key_values, draft_past_key_values
             draft_time_list.append(exp_log.get("avg_draft_time", 0))
         if exp_log.get("avg_target_time", None) is not None:
             target_time_list.append(exp_log.get("avg_target_time", 0))
-        
-        # log spec_skip/regular count
-        if hasattr(generator, 'spec_skip_count') and generator.spec_skip_count is not None:
-            logging.info(f"Skip count: {generator.spec_skip_count}, Regular count: {generator.regular_count}")
-            skip_spec_count_list.append(generator.spec_skip_count)
-            regular_count_list.append(generator.regular_count)
+        if exp_log.get("regular_count", None) is not None:
+            regular_count_list.append(exp_log.get("regular_count", 0))
+        if exp_log.get("skip_spec_count", None) is not None:
+            skip_spec_count_list.append(exp_log.get("skip_spec_count", 0))
             
         del input_ids, output_ids
         gc.collect()
@@ -97,8 +95,8 @@ def run_common_eval(generator, tokenizer, past_key_values, draft_past_key_values
     print(f"\tAverage Draft Time: {avg_draft_time:.3f} sec")
     print(f"\tAverage Target Time: {avg_target_time:.3f} sec")
     print(f"\tPeak Memory: {peak_memory:.3f} GiB")
-    if hasattr(generator, 'spec_skip_count') and generator.spec_skip_count is not None:
-        print(f"\tSkip Speculation Rate: {generator.exp_log.get('skip_spec_rate', 0):.3f}")
+    if exp_log.get('skip_spec_count', None) is not None:
+        print(f"\tSkip Speculate Rate: {skip_spec_rate:.3f}")
     
     # return tput_mean, tput_std, tacc_mean, tacc_std, avg_draft_time, avg_target_time, peak_memory
     return {
@@ -107,7 +105,7 @@ def run_common_eval(generator, tokenizer, past_key_values, draft_past_key_values
         "avg_draft_time": float(avg_draft_time),
         "avg_target_time": float(avg_target_time),
         "peak_memory_gib": float(peak_memory),
-        "skip_spec_rate": float(skip_spec_rate) if hasattr(generator, 'spec_skip_count') and generator.spec_skip_count is not None else 0,
+        "skip_spec_rate": float(skip_spec_rate) if exp_log.get('skip_spec_count', None) is not None else 0,
     }
 
 
@@ -169,15 +167,17 @@ def run_mtbench_eval(generator, tokenizer, past_key_values, draft_past_key_value
             tmp_exp_log['total_draft_time'] += generator.exp_log.get('avg_draft_time', 0) * n_iter
             tmp_exp_log['total_target_time'] += generator.exp_log.get('avg_target_time', 0) * n_iter
             tmp_exp_log['total_verify_time'] += generator.exp_log.get('avg_verify_time', 0) * n_iter
+            tmp_exp_log['skip_spec_count'] += generator.exp_log.get('skip_spec_count', 0)
+            tmp_exp_log['regular_count'] += generator.exp_log.get('regular_count', 0)
             
             exp_log = {**exp_log, tid: {**generator.exp_log, "query": query, "response": output_message, "peak_memory": torch.cuda.max_memory_reserved(args.device)/(1024**3)}}
             messages.append({"role": "system", "content": output_message})
             
-            # log spec_skip/regular count
-            if hasattr(generator, 'spec_skip_count') and generator.spec_skip_count is not None:
-                logging.info(f"Skip count: {generator.spec_skip_count}, Regular count: {generator.regular_count}")
-                skip_spec_count_list.append(generator.spec_skip_count)
-                regular_count_list.append(generator.regular_count)
+            # # log spec_skip/regular count
+            # if hasattr(generator, 'skip_spec_count') and generator.skip_spec_count is not None:
+            #     logging.info(f"Skip Spec count: {generator.skip_spec_count}, Regular count: {generator.regular_count}")
+            #     skip_spec_count_list.append(generator.skip_spec_count)
+            #     regular_count_list.append(generator.regular_count)
             
             del input_ids, output_ids
             gc.collect()
@@ -196,7 +196,10 @@ def run_mtbench_eval(generator, tokenizer, past_key_values, draft_past_key_value
             "n_tokens": tmp_exp_log['n_tokens'], 
             "avg_sampled": tmp_exp_log['total_sampled'] / tmp_exp_log['n_iter'] if tmp_exp_log['n_iter'] > 0 else 0,
             "elapsed_time": tmp_exp_log['elapsed_time'],
-            "tput": tmp_exp_log['n_tokens'] / tmp_exp_log['elapsed_time']                    
+            "tput": tmp_exp_log['n_tokens'] / tmp_exp_log['elapsed_time'],
+            "skip_spec_count": tmp_exp_log['skip_spec_count'],
+            "regular_count": tmp_exp_log['regular_count'],
+            "spec_skip_rate": tmp_exp_log['skip_spec_count'] / (tmp_exp_log['skip_spec_count'] + tmp_exp_log['regular_count']) if (tmp_exp_log['skip_spec_count'] + tmp_exp_log['regular_count']) > 0 else 0,  
         }
         
         exp_log = {
@@ -218,10 +221,10 @@ def run_mtbench_eval(generator, tokenizer, past_key_values, draft_past_key_value
             target_time_list.append(overall_log.get("avg_target_time", 0))
         
         # log spec_skip/regular count
-        if hasattr(generator, 'spec_skip_count') and generator.spec_skip_count is not None:
-            logging.info(f"Skip count: {generator.spec_skip_count}, Regular count: {generator.regular_count}")
-            skip_spec_count_list.append(generator.spec_skip_count)
-            regular_count_list.append(generator.regular_count)
+        if overall_log.get("skip_spec_count", None) is not None:
+            logging.info(f"Skip count: {overall_log.get('skip_spec_count', 0)}, Regular count: {overall_log.get('regular_count', 0)}")
+            skip_spec_count_list.append(overall_log.get('skip_spec_count', 0))
+            regular_count_list.append(overall_log.get('regular_count', 0))
             
     print(f"Final Results:")
     tput_mean, tput_std = np.mean(tput_list), np.std(tput_list)
@@ -235,7 +238,7 @@ def run_mtbench_eval(generator, tokenizer, past_key_values, draft_past_key_value
     print(f"\tAverage Draft Time: {avg_draft_time:.3f} sec")
     print(f"\tAverage Target Time: {avg_target_time:.3f} sec")
     print(f"\tPeak Memory: {peak_memory:.3f} GiB")
-    if hasattr(generator, 'spec_skip_count') and generator.spec_skip_count is not None:
+    if hasattr(generator, 'skip_spec_count') and generator.skip_spec_count is not None:
         print(f"\tSkip Speculate Rate: {skip_spec_rate:.3f}")
     
     # return tput_mean, tput_std, tacc_mean, tacc_std, avg_draft_time, avg_target_time, peak_memory
@@ -245,5 +248,5 @@ def run_mtbench_eval(generator, tokenizer, past_key_values, draft_past_key_value
         "avg_draft_time": float(avg_draft_time),
         "avg_target_time": float(avg_target_time),
         "peak_memory_gib": float(peak_memory),
-        "skip_spec_rate": float(skip_spec_rate) if hasattr(generator, 'spec_skip_count') and generator.spec_skip_count is not None else 0,
+        "skip_spec_rate": float(skip_spec_rate) if hasattr(generator, 'skip_spec_count') and generator.skip_spec_count is not None else 0,
     }
