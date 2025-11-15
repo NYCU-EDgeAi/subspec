@@ -76,7 +76,7 @@ def run_common_eval(generator, tokenizer, past_key_values, draft_past_key_values
             target_time_list.append(exp_log.get("avg_target_time", 0))
         
         # log spec_skip/regular count
-        if generator.spec_skip_count is not None:
+        if hasattr(generator, 'spec_skip_count') and generator.spec_skip_count is not None:
             logging.info(f"Skip count: {generator.spec_skip_count}, Regular count: {generator.regular_count}")
             skip_spec_count_list.append(generator.spec_skip_count)
             regular_count_list.append(generator.regular_count)
@@ -218,7 +218,7 @@ def run_mtbench_eval(generator, tokenizer, past_key_values, draft_past_key_value
             target_time_list.append(overall_log.get("avg_target_time", 0))
         
         # log spec_skip/regular count
-        if generator.spec_skip_count is not None:
+        if hasattr(generator, 'spec_skip_count') and generator.spec_skip_count is not None:
             logging.info(f"Skip count: {generator.spec_skip_count}, Regular count: {generator.regular_count}")
             skip_spec_count_list.append(generator.spec_skip_count)
             regular_count_list.append(generator.regular_count)
