@@ -20,7 +20,7 @@ DETAILED_ANALYSIS=False
 ###############################################################################
 # Construct command
 ###############################################################################
-CMD="LOGLEVEL=$LOGLEVEL CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES DETAILED_ANALYSIS=$DETAILED_ANALYSIS PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True"
+CMD="LOGLEVEL=$LOGLEVEL CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES DETAILED_ANALYSIS=$DETAILED_ANALYSIS PYTORCH_ALLOC_CONF=expandable_segments:True"
 
 if [ "$NVTX_PROFILING" = True ]; then
   # https://dev-discuss.pytorch.org/t/using-nsight-systems-to-profile-gpu-workload/59
