@@ -62,10 +62,25 @@ class SDProfilingMixin:
         self.draft_events = []
         self.target_events = []
         self.verify_events = []
+        self.post_verify_events = []
         
         self.profiling = profiling
         self.exp_log = {}
         super().__init__(*args, **kwargs)
+        
+    def _post_verify(self, *model_args, **kwargs):
+        if not self.profiling:
+            return super()._post_verify(*model_args, **kwargs)
+        
+        start_event = torch.cuda.Event(enable_timing=True)
+        end_event = torch.cuda.Event(enable_timing=True)
+        
+        start_event.record()
+        root = super()._post_verify(*model_args, **kwargs)
+        end_event.record()
+
+        self.post_verify_events.append((start_event, end_event))
+        return root
         
     def _speculate(self, *model_args, **kwargs):
         if not self.profiling:
@@ -159,6 +174,11 @@ class SDProfilingMixin:
         draft_time_total_ms = 0.0
         for (start_event, end_event) in self.draft_events:
             draft_time_total_ms += start_event.elapsed_time(end_event)  # returns time in ms
+        
+        # Compute total time for post-verify iterations
+        post_verify_time_total_ms = 0.0
+        for (start_event, end_event) in self.post_verify_events:
+            post_verify_time_total_ms += start_event.elapsed_time(end_event)  # returns time in ms
 
         # Compute total time for target iterations
         target_time_total_ms = 0.0
@@ -171,7 +191,7 @@ class SDProfilingMixin:
             verify_time_total_ms += start_event.elapsed_time(end_event)
 
         # Average times (in milliseconds)
-        draft_avg_ms = draft_time_total_ms / max(len(self.draft_events), 1)
+        draft_avg_ms = (draft_time_total_ms+post_verify_time_total_ms) / max(len(self.draft_events), 1)
         target_avg_ms = target_time_total_ms / max(len(self.target_events), 1)
         verify_avg_ms = verify_time_total_ms / max(len(self.verify_events), 1)
 

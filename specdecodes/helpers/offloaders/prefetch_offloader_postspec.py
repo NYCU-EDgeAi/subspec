@@ -84,13 +84,13 @@ class PrefetchOffloader:
 
         current_layer = first_cpu_layer
         for name in cpu_layer_order[1:]:
-            print(f"layer: {name}")
+            # print(f"layer: {name}")
             next_layer = find_child(model, name)
 
             current_layer.register_forward_pre_hook(self._create_wait_hook())
             current_layer.register_forward_pre_hook(self._create_prefetch_hook(next_layer, self.cpu_tensors[name]))
             
-            if name.endswith(".mlp.gate_proj") or name.endswith(".mlp.up_proj"):
+            if name.endswith(".self_attn.o_proj"):
                 # current_layer.register_forward_pre_hook(self._create_draft_pre_hook())
                 current_layer.register_forward_hook(self._create_draft_hook())
             current_layer = next_layer
