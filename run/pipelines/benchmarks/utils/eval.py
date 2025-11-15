@@ -35,7 +35,8 @@ def run_common_eval(generator, tokenizer, past_key_values, draft_past_key_values
     log_file = os.path.join(log_dir, f"0.jsonl")
     if os.environ.get("DETAILED_ANALYSIS", "False") == "True":
         detailed_log_file = os.path.join(log_dir, f"detailed_analysis.jsonl")
-    tput_list, acc_rate_list, draft_time_list, target_time_list = [], [], [], []
+    tput_list, tacc_list, draft_time_list, target_time_list = [], [], [], []
+    skip_spec_count_list, regular_count_list = [], []
     for idx, query in tqdm(enumerate(dataset), total=len(dataset), desc="Evaluating", leave=True):
         messages = [{"role": "user", "content": query}]
         tokenizer.use_default_system_prompt = True
@@ -54,7 +55,7 @@ def run_common_eval(generator, tokenizer, past_key_values, draft_past_key_values
             draft_past_key_values.reset()
 
         output_message = tokenizer.decode(output_ids[0][input_ids.shape[1]:])
-        exp_log = {**generator.exp_log, "query": query, "response": output_message, "peak_mem": torch.cuda.max_memory_reserved(args.device)/(1024**3)}
+        exp_log = {**generator.exp_log, "query": query, "response": output_message, "peak_memory": torch.cuda.max_memory_reserved(args.device)/(1024**3)}
         with open(log_file, 'a+') as f:
             json.dump(exp_log, f, indent=4)
             f.write("\n")
@@ -68,11 +69,17 @@ def run_common_eval(generator, tokenizer, past_key_values, draft_past_key_values
         if exp_log.get("tput", None) is not None:
             tput_list.append(exp_log.get("tput", 0))
         if exp_log.get("avg_sampled", None) is not None:
-            acc_rate_list.append(exp_log.get("avg_sampled", 0))
+            tacc_list.append(exp_log.get("avg_sampled", 0))
         if exp_log.get("avg_draft_time", None) is not None:
             draft_time_list.append(exp_log.get("avg_draft_time", 0))
         if exp_log.get("avg_target_time", None) is not None:
             target_time_list.append(exp_log.get("avg_target_time", 0))
+        
+        # log spec_skip/regular count
+        if generator.spec_skip_count is not None:
+            logging.info(f"Skip count: {generator.spec_skip_count}, Regular count: {generator.regular_count}")
+            skip_spec_count_list.append(generator.spec_skip_count)
+            regular_count_list.append(generator.regular_count)
             
         del input_ids, output_ids
         gc.collect()
@@ -80,17 +87,29 @@ def run_common_eval(generator, tokenizer, past_key_values, draft_past_key_values
     
     print(f"Final Results:")
     tput_mean, tput_std = np.mean(tput_list), np.std(tput_list)
-    acc_rate_mean, acc_rate_std = np.mean(acc_rate_list), np.std(acc_rate_list) if acc_rate_list else 0
+    tacc_mean, tacc_std = np.mean(tacc_list), np.std(tacc_list) if tacc_list else 0
     avg_draft_time, avg_target_time = np.mean(draft_time_list), np.mean(target_time_list)
-    peak_mem = torch.cuda.max_memory_reserved(args.device)/(1024**3)
+    peak_memory = torch.cuda.max_memory_reserved(args.device)/(1024**3)
+    skip_spec_rate = np.sum(skip_spec_count_list) / (np.sum(skip_spec_count_list) + np.sum(regular_count_list)) if (np.sum(skip_spec_count_list) + np.sum(regular_count_list)) > 0 else 0
     
     print(f"\tThroughput: {tput_mean:.3f} ± {tput_std:.3f} tokens/sec")
-    print(f"\tAcceptance rate: {acc_rate_mean:.3f} ± {acc_rate_std:.3f} tokens/iter")
+    print(f"\tAcceptance Length: {tacc_mean:.3f} ± {tacc_std:.3f} tokens/iter")
     print(f"\tAverage Draft Time: {avg_draft_time:.3f} sec")
     print(f"\tAverage Target Time: {avg_target_time:.3f} sec")
-    print(f"\tPeak Memory: {peak_mem:.3f} GiB")
+    print(f"\tPeak Memory: {peak_memory:.3f} GiB")
+    if hasattr(generator, 'spec_skip_count') and generator.spec_skip_count is not None:
+        print(f"\tSkip Speculation Rate: {generator.exp_log.get('skip_spec_rate', 0):.3f}")
     
-    return tput_mean, tput_std, acc_rate_mean, acc_rate_std, avg_draft_time, avg_target_time, peak_mem
+    # return tput_mean, tput_std, tacc_mean, tacc_std, avg_draft_time, avg_target_time, peak_memory
+    return {
+        "tput_mean": float(tput_mean),
+        "tput_std": float(tput_std),
+        "avg_draft_time": float(avg_draft_time),
+        "avg_target_time": float(avg_target_time),
+        "peak_memory_gib": float(peak_memory),
+        "skip_spec_rate": float(skip_spec_rate) if hasattr(generator, 'spec_skip_count') and generator.spec_skip_count is not None else 0,
+    }
+
 
 def run_mtbench_eval(generator, tokenizer, past_key_values, draft_past_key_values, args, dataset, log_dir):
     # Warm up the model
@@ -115,7 +134,8 @@ def run_mtbench_eval(generator, tokenizer, past_key_values, draft_past_key_value
 
     # Evaluate dataset
     log_file = os.path.join(log_dir, f"0.jsonl")
-    tput_list, acc_rate_list, draft_time_list, target_time_list = [], [], [], []
+    tput_list, tacc_list, draft_time_list, target_time_list = [], [], [], []
+    skip_spec_count_list, regular_count_list = [], []
     for idx, turns in tqdm(enumerate(dataset), total=len(dataset), desc="Evaluating", leave=True):
         # org_len = 0
         exp_log = {}
@@ -150,8 +170,14 @@ def run_mtbench_eval(generator, tokenizer, past_key_values, draft_past_key_value
             tmp_exp_log['total_target_time'] += generator.exp_log.get('avg_target_time', 0) * n_iter
             tmp_exp_log['total_verify_time'] += generator.exp_log.get('avg_verify_time', 0) * n_iter
             
-            exp_log = {**exp_log, tid: {**generator.exp_log, "query": query, "response": output_message, "peak_mem": torch.cuda.max_memory_reserved(args.device)/(1024**3)}}
+            exp_log = {**exp_log, tid: {**generator.exp_log, "query": query, "response": output_message, "peak_memory": torch.cuda.max_memory_reserved(args.device)/(1024**3)}}
             messages.append({"role": "system", "content": output_message})
+            
+            # log spec_skip/regular count
+            if hasattr(generator, 'spec_skip_count') and generator.spec_skip_count is not None:
+                logging.info(f"Skip count: {generator.spec_skip_count}, Regular count: {generator.regular_count}")
+                skip_spec_count_list.append(generator.spec_skip_count)
+                regular_count_list.append(generator.regular_count)
             
             del input_ids, output_ids
             gc.collect()
@@ -185,22 +211,39 @@ def run_mtbench_eval(generator, tokenizer, past_key_values, draft_past_key_value
         if overall_log.get("tput", None) is not None:
             tput_list.append(overall_log.get("tput", 0))
         if overall_log.get("avg_sampled", None) is not None:
-            acc_rate_list.append(overall_log.get("avg_sampled", 0))
+            tacc_list.append(overall_log.get("avg_sampled", 0))
         if overall_log.get("avg_draft_time", None) is not None:
             draft_time_list.append(overall_log.get("avg_draft_time", 0))
         if overall_log.get("avg_target_time", None) is not None:
             target_time_list.append(overall_log.get("avg_target_time", 0))
-    
+        
+        # log spec_skip/regular count
+        if generator.spec_skip_count is not None:
+            logging.info(f"Skip count: {generator.spec_skip_count}, Regular count: {generator.regular_count}")
+            skip_spec_count_list.append(generator.spec_skip_count)
+            regular_count_list.append(generator.regular_count)
+            
     print(f"Final Results:")
     tput_mean, tput_std = np.mean(tput_list), np.std(tput_list)
-    acc_rate_mean, acc_rate_std = np.mean(acc_rate_list), np.std(acc_rate_list) if acc_rate_list else 0
+    tacc_mean, tacc_std = np.mean(tacc_list), np.std(tacc_list) if tacc_list else 0
     avg_draft_time, avg_target_time = np.mean(draft_time_list), np.mean(target_time_list)
-    peak_mem = torch.cuda.max_memory_reserved(args.device)/(1024**3)
+    peak_memory = torch.cuda.max_memory_reserved(args.device)/(1024**3)
+    skip_spec_rate = np.sum(skip_spec_count_list) / (np.sum(skip_spec_count_list) + np.sum(regular_count_list)) if (np.sum(skip_spec_count_list) + np.sum(regular_count_list)) > 0 else 0
     
     print(f"\tThroughput: {tput_mean:.3f} ± {tput_std:.3f} tokens/sec")
-    print(f"\tAcceptance rate: {acc_rate_mean:.3f} ± {acc_rate_std:.3f} tokens/iter")
+    print(f"\tAcceptance Length: {tacc_mean:.3f} ± {tacc_std:.3f} tokens/iter")
     print(f"\tAverage Draft Time: {avg_draft_time:.3f} sec")
     print(f"\tAverage Target Time: {avg_target_time:.3f} sec")
-    print(f"\tPeak Memory: {peak_mem:.3f} GiB")
+    print(f"\tPeak Memory: {peak_memory:.3f} GiB")
+    if hasattr(generator, 'spec_skip_count') and generator.spec_skip_count is not None:
+        print(f"\tSkip Speculate Rate: {skip_spec_rate:.3f}")
     
-    return tput_mean, tput_std, acc_rate_mean, acc_rate_std, avg_draft_time, avg_target_time, peak_mem
+    # return tput_mean, tput_std, tacc_mean, tacc_std, avg_draft_time, avg_target_time, peak_memory
+    return {
+        "tput_mean": float(tput_mean),
+        "tput_std": float(tput_std),
+        "avg_draft_time": float(avg_draft_time),
+        "avg_target_time": float(avg_target_time),
+        "peak_memory_gib": float(peak_memory),
+        "skip_spec_rate": float(skip_spec_rate) if hasattr(generator, 'spec_skip_count') and generator.spec_skip_count is not None else 0,
+    }

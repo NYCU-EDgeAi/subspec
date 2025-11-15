@@ -209,17 +209,17 @@ def run_gsm8k_eval(generator, tokenizer, past_key_values, draft_past_key_values,
     else:
         print("\tTacc_judge       : 0.000 (not available)")
 
-    # 5. Return metrics tuple
-    return (
-        tput_mean,
-        tput_std,
-        tacc_mean,
-        tacc_std,
-        answer_accuracy,
-        avg_draft,
-        avg_target,
-        peak_memory
-    )
+    # 5. Return metrics as a JSON-serializable dict for better scalability
+    return {
+        "tput_mean": float(tput_mean),
+        "tput_std": float(tput_std),
+        "tacc_mean": float(tacc_mean),
+        "tacc_std": float(tacc_std),
+        "accuracy": float(answer_accuracy),
+        "avg_draft_time": float(avg_draft),
+        "avg_target_time": float(avg_target),
+        "peak_memory_gib": float(peak_memory),
+    }
 
 def run_aime_eval(generator, tokenizer,
                   past_key_values, draft_past_key_values,
@@ -361,13 +361,17 @@ def run_aime_eval(generator, tokenizer,
     print(f"\tAvg Target Time  : {avg_target:.3f} sec")
     print(f"\tPeak Memory      : {peak_mem:.3f} GiB")
 
-    return (
-        tput_mean, tput_std,
-        tacc_mean, tacc_std,
-        accuracy,
-        avg_draft, avg_target,
-        peak_mem
-    )
+    # Return JSON-like dict for scalability
+    return {
+        "tput_mean": float(tput_mean),
+        "tput_std": float(tput_std),
+        "tacc_mean": float(tacc_mean),
+        "tacc_std": float(tacc_std),
+        "accuracy": float(accuracy),
+        "avg_draft_time": float(avg_draft),
+        "avg_target_time": float(avg_target),
+        "peak_memory_gib": float(peak_mem),
+    }
 
 # WARNING: This function is NOT ready
 def run_mmlu_pro_eval(generator, tokenizer,
@@ -469,25 +473,29 @@ def run_mmlu_pro_eval(generator, tokenizer,
     tput_mean, tput_std = (np.mean(tput_list), np.std(tput_list)) if tput_list else (0,0)
     tacc_mean, tacc_std = (np.mean(tacc_list), np.std(tacc_list)) if tacc_list else (0,0)
     accuracy = correct_q/total_q if total_q else 0
-    avg_draft  = np.mean(draft_times)  if draft_times  else 0
-    avg_target = np.mean(target_times) if target_times else 0
+    avg_draft_time  = np.mean(draft_times)  if draft_times  else 0
+    avg_target_time = np.mean(target_times) if target_times else 0
     peak_mem   = torch.cuda.max_memory_reserved(generator.device)/(1024**3)
 
     print("Final MMLU‑Pro Results:")
     print(f"\tThroughput       : {tput_mean:.3f} ± {tput_std:.3f} tokens/sec")
     print(f"\tToken Acceptance : {tacc_mean:.3f} ± {tacc_std:.3f}")
     print(f"\tAnswer Accuracy  : {accuracy:.3f} ({correct_q}/{total_q})")
-    print(f"\tAvg Draft Time   : {avg_draft:.3f} sec")
-    print(f"\tAvg Target Time  : {avg_target:.3f} sec")
+    print(f"\tAvg Draft Time   : {avg_draft_time:.3f} sec")
+    print(f"\tAvg Target Time  : {avg_target_time:.3f} sec")
     print(f"\tPeak Memory      : {peak_mem:.3f} GiB")
 
-    return (
-        tput_mean, tput_std,
-        tacc_mean, tacc_std,
-        accuracy,
-        avg_draft, avg_target,
-        peak_mem
-    )
+    # Return JSON-like dict for scalability
+    return {
+        "tput_mean": float(tput_mean),
+        "tput_std": float(tput_std),
+        "tacc_mean": float(tacc_mean),
+        "tacc_std": float(tacc_std),
+        "accuracy": float(accuracy),
+        "avg_draft_time": float(avg_draft_time),
+        "avg_target_time": float(avg_target_time),
+        "peak_memory_gib": float(peak_mem),
+    }
 
 
 
@@ -697,11 +705,20 @@ def run_livecodebench_eval(
     # The function signature expects you to return these values
     tput_mean, tput_std = (np.mean(tput_list), np.std(tput_list)) if tput_list else (0, 0)
     tacc_mean, tacc_std = (np.mean(tacc_list), np.std(tacc_list)) if tacc_list else (0, 0)
-    avg_draft = np.mean(draft_times) if draft_times else 0
-    avg_target = np.mean(target_times) if target_times else 0
+    avg_draft_time = np.mean(draft_times) if draft_times else 0
+    avg_target_time = np.mean(target_times) if target_times else 0
     peak_memory = torch.cuda.max_memory_reserved(generator.device) / (1024 ** 3)
 
-    return (tput_mean, tput_std, tacc_mean, tacc_std, avg_draft, avg_target, peak_memory)
+    # Return JSON-like dict for scalability
+    return {
+        "tput_mean": float(tput_mean),
+        "tput_std": float(tput_std),
+        "tacc_mean": float(tacc_mean),
+        "tacc_std": float(tacc_std),
+        "avg_draft_time": float(avg_draft_time),
+        "avg_target_time": float(avg_target_time),
+        "peak_memory_gib": float(peak_memory),
+    }
 
 # For longbench
 def run_longbench_eval(generator, tokenizer, past_key_values, draft_past_key_values, args, dataset, log_dir, bench_name):
@@ -897,8 +914,8 @@ def run_longbench_eval(generator, tokenizer, past_key_values, draft_past_key_val
     tput_mean, tput_std = (np.mean(tput_list), np.std(tput_list)) if tput_list else (0, 0)
     tacc_mean, tacc_std = (np.mean(tacc_list), np.std(tacc_list)) if tacc_list else (0, 0)
     answer_accuracy = round(100 * correct_q / total_q, 2) if total_q > 0 else 0
-    avg_draft = np.mean(draft_times) if draft_times else 0
-    avg_target = np.mean(target_times) if target_times else 0
+    avg_draft_time = np.mean(draft_times) if draft_times else 0
+    avg_target_time = np.mean(target_times) if target_times else 0
     peak_memory = torch.cuda.max_memory_reserved(generator.device) / (1024 ** 3)
 
     # 4. Print summary
@@ -906,8 +923,8 @@ def run_longbench_eval(generator, tokenizer, past_key_values, draft_past_key_val
     print(f"\tThroughput       : {tput_mean:.3f} ± {tput_std:.3f} tokens/sec")
     print(f"\tToken Acceptance : {tacc_mean:.3f} ± {tacc_std:.3f}")
     print(f"\tAnswer Accuracy  : {answer_accuracy:.3f} ({correct_q}/{total_q})")
-    print(f"\tAvg Draft Time   : {avg_draft:.3f} sec")
-    print(f"\tAvg Target Time  : {avg_target:.3f} sec")
+    print(f"\tAvg Draft Time   : {avg_draft_time:.3f} sec")
+    print(f"\tAvg Target Time  : {avg_target_time:.3f} sec")
     print(f"\tPeak Memory      : {peak_memory:.3f} GiB")
     if hasattr(generator, "judge_acc_len_list"):
         print(f"\tTacc_judge       : {np.mean(generator.judge_acc_len_list):.3f}")
@@ -915,13 +932,21 @@ def run_longbench_eval(generator, tokenizer, past_key_values, draft_past_key_val
         print("\tTacc_judge       : 0.000 (not available)")
 
     # 5. Return metrics tuple
-    return (
-        tput_mean,
-        tput_std,
-        tacc_mean,
-        tacc_std,
-        answer_accuracy,
-        avg_draft,
-        avg_target,
-        peak_memory
-    )
+    # return (
+    #     tput_mean,
+    #     tput_std,
+    #     tacc_mean,
+    #     tacc_std,
+    #     answer_accuracy,
+    #     avg_draft,
+    #     avg_target,
+    #     peak_memory
+    # )
+    
+    return {
+        "tput_mean": float(tput_mean),
+        "tput_std": float(tput_std),
+        "avg_draft_time": float(avg_draft_time),
+        "avg_target_time": float(avg_target_time),
+        "peak_memory_gib": float(peak_memory),
+    }
