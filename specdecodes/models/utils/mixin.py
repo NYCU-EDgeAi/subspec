@@ -303,7 +303,7 @@ class SDProfilingMixin:
         self.exp_log['n_tokens'] = len(input_ids[0][org_input_len:])
         self.exp_log['elapsed_time'] = elapsed_time_s
         self.exp_log['tput'] = len(input_ids[0][org_input_len:]) / elapsed_time_s
-        if self.skip_spec_count is not None and self.regular_count is not None:
+        if self.exp_log.get('skip_spec_count', None) is not None:
             self.exp_log['skip_spec_count'] = self.skip_spec_count
             self.exp_log['regular_count'] = self.regular_count
             self.exp_log['spec_skip_rate'] = self.skip_spec_count / (self.skip_spec_count + self.regular_count)
