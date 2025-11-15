@@ -62,6 +62,16 @@ def run_app(builder):
         main_run_benchmark_acc(builder, benchmarks=benchmarks, max_samples=max_samples)
 
     @app.command()
+    def run_benchmark_agent(benchmarks: str = None, max_samples: int = None):
+        """
+        Example subcommand for benchmarking.
+        Usage: 
+            python custom.py run-benchmark --bench-name=mt-bench
+        """
+        from .pipelines.run_benchmark_agent import main as main_run_benchmark_agent
+        main_run_benchmark_agent(builder, benchmarks=benchmarks, max_samples=max_samples)
+
+    @app.command()
     def run_gradio():
         """
         Example subcommand for launching a Gradio demo.

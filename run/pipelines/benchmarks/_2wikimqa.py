@@ -11,13 +11,16 @@ Answer the question based on the given passages. Only give me the answer and do 
 Question: {input}
 Answer:"""
 
-def load_hotpotqa_dataset():
-    dataset = load_dataset("hotpotqa/hotpot_qa", "distractor", split="validation")
-    formatted_dataset = [entry['question'] for entry in dataset]
+# 2wikimqa
+def load_2wikimqa_dataset():
+    dataset = load_dataset("THUDM/LongBench", "2wikimqa", split='test')
+    
+    formatted_dataset = [QUERY_TEMPLATE.format(context=entry['context'], input=entry['input']) for entry in dataset]
+
     return formatted_dataset
 
-def load_hotpotqa_dataset_answer():
-    dataset = load_dataset("THUDM/LongBench", "hotpotqa", split='test')
+def load_2wikimqa_dataset_answer():
+    dataset = load_dataset("THUDM/LongBench", "2wikimqa", split='test')
     examples = []
 
     for entry in dataset:
