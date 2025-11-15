@@ -112,24 +112,31 @@ def main(builder, benchmarks=None, max_samples=None):
         torch.cuda.reset_peak_memory_stats()
 
         # Evaluate
-        tput_mean, tput_std, acc_rate_mean, acc_rate_std, avg_draft_time, avg_target_time, peak_mem = \
-            BENCHMARK_EVALUATORS[bench_name](generator, tokenizer, past_kv, draft_past_kv, args, dataset, log_dir)
+        metrics_json = BENCHMARK_EVALUATORS[bench_name](generator, tokenizer, past_kv, draft_past_kv, args, dataset, log_dir)
         
         torch.cuda.empty_cache()
         gc.collect()
         torch.cuda.reset_peak_memory_stats()
     
         # Write results to file
+        # with open(os.path.join(log_dir, "results.jsonl"), 'a+') as f:
+        #     json.dump({
+        #         bench_name: {
+        #             "tput": f"{tput_mean:.3f}",
+        #             "tput_std": f"{tput_std:.3f}", 
+        #             "Tacc": f"{acc_rate_mean:.3f}",
+        #             "Tacc_std": f"{acc_rate_std:.3f}",
+        #             "avg_draft_time": f"{avg_draft_time:.3f}",
+        #             "avg_target_time": f"{avg_target_time:.3f}",
+        #             "peak_memory": f"{peak_mem:.3f} GiB"
+        #         }
+        #     }, f, indent=4)
+        #     f.write("\n")
+        
+        # reduce float values to 3 decimal places
+        for key in metrics_json:
+            if isinstance(metrics_json[key], float):
+                metrics_json[key] = f"{metrics_json[key]:.3f}"
         with open(os.path.join(log_dir, "results.jsonl"), 'a+') as f:
-            json.dump({
-                bench_name: {
-                    "tput": f"{tput_mean:.3f}",
-                    "tput_std": f"{tput_std:.3f}", 
-                    "Tacc": f"{acc_rate_mean:.3f}",
-                    "Tacc_std": f"{acc_rate_std:.3f}",
-                    "avg_draft_time": f"{avg_draft_time:.3f}",
-                    "avg_target_time": f"{avg_target_time:.3f}",
-                    "peak_memory": f"{peak_mem:.3f} GiB"
-                }
-            }, f, indent=4)
+            json.dump({bench_name: metrics_json}, f, indent=4)
             f.write("\n")
