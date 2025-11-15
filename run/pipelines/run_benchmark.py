@@ -8,7 +8,7 @@ import logging
 import gc
 from tqdm import tqdm
 
-from .benchmarks.utils.eval import run_common_eval, run_mtbench_eval, run_agent_eval
+from .benchmarks.utils.eval import run_common_eval, run_mtbench_eval
 from .benchmarks.mtbench import load_mtbench_dataset
 from .benchmarks.humaneval import load_humaneval_dataset
 from .benchmarks.gsm8k import load_gsm8k_dataset
@@ -19,6 +19,21 @@ from .benchmarks.gpqa import load_gpqa_dataset
 from .benchmarks.math500 import load_math500_dataset
 from .benchmarks.livecodebench import load_livecodebench_dataset
 from .benchmarks.hotpotqa import load_hotpotqa_dataset
+from .benchmarks.narrativeqa import load_narrativeqa_dataset
+from .benchmarks.qasper import load_qasper_dataset
+from .benchmarks.multifieldqa_en import load_multifieldqa_en_dataset
+from .benchmarks.musique import load_musique_dataset
+from .benchmarks._2wikimqa import load_2wikimqa_dataset
+from .benchmarks.gov_report import load_gov_report_dataset
+from .benchmarks.qmsum import load_qmsum_dataset
+from .benchmarks.multi_news import load_multi_news_dataset
+from .benchmarks.trec import load_trec_dataset
+from .benchmarks.triviaqa import load_triviaqa_dataset
+from .benchmarks.samsum import load_samsum_dataset
+from .benchmarks.passage_count import load_passage_count_dataset
+from .benchmarks.passage_retrieval_en import load_passage_retrieval_en_dataset
+from .benchmarks.lcc import load_lcc_dataset
+from .benchmarks.repobench_p import load_repobench_p_dataset
 
 DATASET_LOADER = {
     "mt-bench": load_mtbench_dataset,
@@ -31,6 +46,22 @@ DATASET_LOADER = {
     "math-500": load_math500_dataset,
     "livecodebench": load_livecodebench_dataset,
     "hotpotqa": load_hotpotqa_dataset,
+    "narrativeqa": load_narrativeqa_dataset,
+    "qasper": load_qasper_dataset,
+    "multifieldqa_en": load_multifieldqa_en_dataset,
+    "hotpotqa": load_hotpotqa_dataset,
+    "2wikimqa": load_2wikimqa_dataset,
+    "musique": load_musique_dataset,  
+    "gov_report": load_gov_report_dataset,
+    "qmsum": load_qmsum_dataset,
+    "multi_news": load_multi_news_dataset,
+    "trec": load_trec_dataset, 
+    "triviaqa": load_triviaqa_dataset, 
+    "samsum": load_samsum_dataset,
+    "passage_count": load_passage_count_dataset,
+    "passage_retrieval_en": load_passage_retrieval_en_dataset,
+    "lcc": load_lcc_dataset,
+    "repobench_p": load_repobench_p_dataset,
 }
 
 BENCHMARK_EVALUATORS = {
@@ -43,7 +74,22 @@ BENCHMARK_EVALUATORS = {
     "gpqa": run_common_eval,
     "math-500": run_common_eval,
     "livecodebench": run_common_eval,
-    "hotpotqa": run_agent_eval,
+    "hotpotqa": run_common_eval,
+    "narrativeqa": run_common_eval,
+    "qasper": run_common_eval,
+    "multifieldqa_en": run_common_eval,
+    "2wikimqa": run_common_eval,
+    "musique": run_common_eval,  
+    "gov_report": run_common_eval,
+    "qmsum": run_common_eval, 
+    "multi_news": run_common_eval,
+    "trec": run_common_eval,
+    "triviaqa": run_common_eval,
+    "samsum": run_common_eval,  
+    "passage_count": run_common_eval,  
+    "passage_retrieval_en": run_common_eval,  
+    "lcc": run_common_eval,  
+    "repobench_p": run_common_eval,
 }
 
 # Benchmarks

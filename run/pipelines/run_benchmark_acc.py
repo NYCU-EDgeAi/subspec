@@ -10,17 +10,49 @@ import gc
 from tqdm import tqdm
 import numpy as np
 
-from .benchmarks.utils.eval_acc import run_gsm8k_eval, run_aime_eval, run_livecodebench_eval, run_mmlu_pro_eval
+from .benchmarks.utils.eval_acc import run_gsm8k_eval, run_aime_eval, run_livecodebench_eval, run_mmlu_pro_eval, run_longbench_eval
 from .benchmarks.gsm8k import load_gsm8k_dataset_answer
 from .benchmarks.aime import load_aime_dataset_answer
 from .benchmarks.livecodebench import load_livecodebench_dataset_answer
 from .benchmarks.mmlu_pro import load_mmlu_pro_dataset_answer
+from .benchmarks.narrativeqa import load_narrativeqa_dataset_answer
+from .benchmarks.qasper import load_qasper_dataset_answer
+from .benchmarks.multifieldqa_en import load_multifieldqa_en_dataset_answer
+from .benchmarks.hotpotqa import load_hotpotqa_dataset_answer
+from .benchmarks.musique import load_musique_dataset_answer
+from .benchmarks._2wikimqa import load_2wikimqa_dataset_answer
+from .benchmarks.gov_report import load_gov_report_dataset_answer
+from .benchmarks.qmsum import load_qmsum_dataset_answer
+from .benchmarks.multi_news import load_multi_news_dataset_answer
+from .benchmarks.trec import load_trec_dataset_answer
+from .benchmarks.triviaqa import load_triviaqa_dataset_answer
+from .benchmarks.samsum import load_samsum_dataset_answer
+from .benchmarks.passage_count import load_passage_count_dataset_answer
+from .benchmarks.passage_retrieval_en import load_passage_retrieval_en_dataset_answer
+from .benchmarks.lcc import load_lcc_dataset_answer
+from .benchmarks.repobench_p import load_repobench_p_dataset_answer
 
 DATASET_LOADER = {
     "gsm8k":      load_gsm8k_dataset_answer,
     "aime":       load_aime_dataset_answer,
     "livecodebench": load_livecodebench_dataset_answer,
     "mmlu_pro":   load_mmlu_pro_dataset_answer,
+    "narrativeqa": load_narrativeqa_dataset_answer,
+    "qasper": load_qasper_dataset_answer,
+    "multifieldqa_en": load_multifieldqa_en_dataset_answer,
+    "hotpotqa": load_hotpotqa_dataset_answer,
+    "2wikimqa": load_2wikimqa_dataset_answer,
+    "musique": load_musique_dataset_answer,  
+    "gov_report": load_gov_report_dataset_answer,
+    "qmsum": load_qmsum_dataset_answer,
+    "multi_news": load_multi_news_dataset_answer,
+    "trec": load_trec_dataset_answer, 
+    "triviaqa": load_triviaqa_dataset_answer, 
+    "samsum": load_samsum_dataset_answer,
+    "passage_count": load_passage_count_dataset_answer,
+    "passage_retrieval_en": load_passage_retrieval_en_dataset_answer,
+    "lcc": load_lcc_dataset_answer,
+    "repobench_p": load_repobench_p_dataset_answer,
 }
 
 BENCHMARK_EVALUATORS = {
@@ -28,6 +60,22 @@ BENCHMARK_EVALUATORS = {
     "aime":       run_aime_eval,
     "livecodebench": run_livecodebench_eval,
     "mmlu_pro":   run_mmlu_pro_eval,
+    "narrativeqa": run_longbench_eval,
+    "qasper": run_longbench_eval,
+    "multifieldqa_en": run_longbench_eval,
+    "hotpotqa": run_longbench_eval,
+    "2wikimqa": run_longbench_eval,
+    "musique": run_longbench_eval,  
+    "gov_report": run_longbench_eval,
+    "qmsum": run_longbench_eval, 
+    "multi_news": run_longbench_eval,
+    "trec": run_longbench_eval,
+    "triviaqa": run_longbench_eval,
+    "samsum": run_longbench_eval,  
+    "passage_count": run_longbench_eval,  
+    "passage_retrieval_en": run_longbench_eval,  
+    "lcc": run_longbench_eval,  
+    "repobench_p": run_longbench_eval,
 }
 
 def main(builder, benchmarks=None, max_samples=None):
@@ -70,7 +118,17 @@ def main(builder, benchmarks=None, max_samples=None):
         print(f"Log directory: {log_dir}")
         
         # Load dataset
-        if not bench_name == "mmlu_pro":
+        if "longgenbench" in bench_name:
+            # longgenbench dataset is loaded differently
+            # need "length tag"
+            length_tag = bench_name.split("_")[-1]
+            dataset = DATASET_LOADER[bench_name](length_tag)
+            num_samples = min(len(dataset), max_samples) if max_samples is not None else len(dataset)
+            print(f"Running benchmark: {bench_name}, samples: {num_samples}, length_tag: {length_tag}")
+    
+            random.shuffle(dataset)
+            dataset = dataset[:num_samples]
+        elif not bench_name == "mmlu_pro":
             dataset = DATASET_LOADER[bench_name]()
             num_samples = min(len(dataset), max_samples) if max_samples is not None else len(dataset)
             print(f"Running benchmark: {bench_name}, samples: {num_samples}")
@@ -87,8 +145,12 @@ def main(builder, benchmarks=None, max_samples=None):
         torch.cuda.reset_peak_memory_stats()
     
         # Evaluate
-        tput_mean, tput_std, acc_rate_mean, acc_rate_std, accuracy, avg_draft_time, avg_target_time, peak_mem = \
-            BENCHMARK_EVALUATORS[bench_name](generator, tokenizer, past_kv, draft_past_kv, args, dataset, log_dir)
+        if BENCHMARK_EVALUATORS[bench_name] == run_longbench_eval:
+            tput_mean, tput_std, acc_rate_mean, acc_rate_std, accuracy, avg_draft_time, avg_target_time, peak_mem = \
+                BENCHMARK_EVALUATORS[bench_name](generator, tokenizer, past_kv, draft_past_kv, args, dataset, log_dir, bench_name)
+        else:
+            tput_mean, tput_std, acc_rate_mean, acc_rate_std, accuracy, avg_draft_time, avg_target_time, peak_mem = \
+                BENCHMARK_EVALUATORS[bench_name](generator, tokenizer, past_kv, draft_past_kv, args, dataset, log_dir)
         
         torch.cuda.empty_cache()
         gc.collect()
