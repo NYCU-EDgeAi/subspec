@@ -31,8 +31,8 @@ class EagleSDGeneratorBase(ClassicSDGeneratorBase):
             tree_mask_partial = tree_mask_partial.to(device)
         
         # Assing to tree mask
-        with nvtx.annotate("update mask"):
-            tree_mask = self._update_tree_mask(tree_mask, tree_mask_partial)
+        with nvtx.annotate("get mask"):
+            tree_mask = self._get_tree_mask(tree_mask, tree_mask_partial)
             tree_mask = invert_mask(tree_mask, dtype=self.target_model.model.dtype)
         
         # llm forward
