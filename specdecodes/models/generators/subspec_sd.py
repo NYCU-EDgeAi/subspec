@@ -68,7 +68,7 @@ class SubSpecSDGeneratorBase(ClassicSDGeneratorBase):
 
         # * prefill stage
         with nvtx.annotate("chunked prefill", color="orange"):
-            tree_mask = self._init_tree_mask(
+            self._init_tree_mask(
                 self.draft_params.max_verify_tokens, max_cache_len, device=input_ids.device
             )
             current_kv_len = past_key_values.get_seq_length()
@@ -126,7 +126,7 @@ class SubSpecSDGeneratorBase(ClassicSDGeneratorBase):
                     prev_kv_len = past_key_values.get_seq_length()
                     if self.cache_implementation == 'dynamic':
                         past_key_values.crop(prev_kv_len)
-                    outputs = self._tree_decoding(tree, tree_mask, past_key_values, position_offset=input_ids.shape[1]-1, cache_position=cache_position, device=input_ids.device)
+                    outputs = self._tree_decoding(tree, past_key_values, position_offset=input_ids.shape[1]-1, cache_position=cache_position, device=input_ids.device)
                     next_token_logits = outputs.logits
                     del outputs
 

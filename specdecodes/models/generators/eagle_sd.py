@@ -116,7 +116,7 @@ class EagleSDGeneratorBase(ClassicSDGeneratorBase):
         
         # * prefill stage
         with nvtx.annotate("chunked prefill", color="orange"):
-            tree_mask = self._init_tree_mask(
+            self._init_tree_mask(
                 self.draft_params.max_verify_tokens, max_cache_len, device=input_ids.device
             )
             current_kv_len = past_key_values.get_seq_length()
@@ -173,7 +173,7 @@ class EagleSDGeneratorBase(ClassicSDGeneratorBase):
                 # * tree decoding
                 with nvtx.annotate("tree_decoding", color="orange"):
                     prev_kv_len = past_key_values.get_seq_length()
-                    outputs = self._tree_decoding(tree, tree_mask, past_key_values, position_offset=input_ids.shape[1]-1, cache_position=cache_position, device=hidden_states.device)
+                    outputs = self._tree_decoding(tree, past_key_values, position_offset=input_ids.shape[1]-1, cache_position=cache_position, device=hidden_states.device)
                     next_token_logits = outputs.logits
                     hidden_states = outputs.hidden_states[-1]
                     del outputs
