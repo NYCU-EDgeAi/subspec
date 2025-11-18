@@ -81,7 +81,7 @@ class TreeMaskCache:
         # Create an identity block for later use
         self.eye_block = torch.eye(self.sample_len, device=self.device, dtype=torch.bool).unsqueeze(0).unsqueeze(0)
 
-    def update_tree_mask(self, parent_indices: torch.Tensor) -> torch.Tensor:
+    def update_tree_mask(self, parent_indices: torch.Tensor,return_invert:bool=True) -> torch.Tensor:
         if self.tree_mask_update_method == 'static': # static tree mask update
             # Update existing mask based on parent indices
             self.tree_mask_cache[..., :self.current_len] = self.tree_mask_cache[..., parent_indices[0], :self.current_len]
@@ -95,11 +95,17 @@ class TreeMaskCache:
             self.tree_mask_cache = torch.concat((tree_mask, self.eye_block), dim=3)
         
         # Invert the mask and return
-        return invert_mask(self.tree_mask_cache, dtype=self.dtype)
+        if return_invert:
+            return invert_mask(self.tree_mask_cache, dtype=self.dtype)
+        else:
+            return self.tree_mask_cache
     
     # return Inverted tree mask (same as update_tree_mask output)
-    def get_tree_mask(self):
-        return invert_mask(self.tree_mask_cache, dtype=self.dtype)
+    def get_tree_mask(self, return_invert:bool=True):
+        if return_invert:
+            return invert_mask(self.tree_mask_cache, dtype=self.dtype)
+        else:
+            return self.tree_mask_cache
 
 class DraftModelBase(nn.Module):
     def __init__(self, base_model=None, target_model=None, eos_token_id=None, *model_args, **model_kwargs):

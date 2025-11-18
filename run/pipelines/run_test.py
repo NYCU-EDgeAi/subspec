@@ -35,7 +35,12 @@ def main(builder):
                 if draft_past_kv is not None:
                     draft_past_kv.reset()
             generator.profiling = is_profiling
-
+    # capture cuda-graph
+    if hasattr(generator, 'init_cuda_graph_runner') and callable(generator.init_cuda_graph_runner) and args.warmup_iter > 0:
+        print("Generator has init_cuda_graph_runner. Initializing CUDA Graph runner...")
+        generator.init_cuda_graph_runner(args.device)
+        past_kv.reset()
+        
     # input message
     input_message = "Do you know what is Beyblade? What is the best strategy to build the strongest Beyblade?"
     # input_message = "Describe what is large language models to me."
