@@ -2,6 +2,9 @@ import torch
 import logging
 import time
 import typer
+# import sys
+# sys.modules['rich'] = None
+
 
 def run_app(builder):
     app = typer.Typer()
