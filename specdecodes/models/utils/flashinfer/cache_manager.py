@@ -41,7 +41,7 @@ class KvCachePool:
         dtype: torch.dtype,
         device: torch.device,
     ):
-        max_pages = 1
+        # max_pages = 1
         
         self.cache_data =  torch.zeros(
                 num_layers, max_pages, 2, page_len, num_heads, head_dim, dtype=dtype, device=device
@@ -227,9 +227,10 @@ class RequestKvCache:
         # return self.kv_last_page_len + (current_num_pages - 1) * self.page_len
 
     def increment(self, num_tokens: int = 1):
+        
         self.kv_len += num_tokens
         self.kv_last_page_len += num_tokens
-        if self.kv_last_page_len > self.page_len:
+        while self.kv_last_page_len > self.page_len:
             self.kv_last_page_len -= self.page_len
             new_indices = self.kvCachePool.allocate(1)
             self.kv_page_indices.extend(new_indices)
@@ -448,14 +449,14 @@ class FlashInferCache():
                 f"({cache_page_size / (1024**2):.2f} MiB required, "
                 f"{free_memory / (1024**2):.2f} MiB available)."
             )
-        # num_pages_to_allocate = int(free_memory * 0.50 / cache_page_size)
+        num_pages_to_allocate = int(free_memory * 0.50 / cache_page_size)
         
-        # if max_tokens is not None and num_pages_to_allocate * PAGE_LEN > max_tokens:
-        #     num_pages_to_allocate = max_tokens // PAGE_LEN + 1
+        if max_tokens is not None and num_pages_to_allocate * PAGE_LEN > max_tokens:
+            num_pages_to_allocate = max_tokens // PAGE_LEN + 1
         print(f"Reducing cache size to {1 * PAGE_LEN} tokens")
         
         self.kvCachePool = KvCachePool(
-                max_pages = 1,
+                max_pages = num_pages_to_allocate,
                 num_layers = config.num_hidden_layers,
                 num_heads = config.num_key_value_heads,
                 head_dim = head_dim,
