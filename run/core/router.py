@@ -16,7 +16,7 @@ def run_app(builder):
         Usage:
             python custom.py run-test
         """
-        from .pipelines.run_test import main as main_run_test
+        from run.pipelines.run_test import main as main_run_test
         # torch.cuda.memory._record_memory_history()
         
         main_run_test(builder)
@@ -31,7 +31,7 @@ def run_app(builder):
         Usage:
             python custom.py run-test
         """
-        from .pipelines.run_agent_test import main as run_agent_test
+        from run.pipelines.run_agent_test import main as run_agent_test
         run_agent_test(builder)
 
     @app.command()
@@ -41,7 +41,8 @@ def run_app(builder):
         Usage:
             python custom.py run-grid-search --t=0.3,0.4 --d=4,8,16,32 --k=8 --max-samples=10
         """
-        from .pipelines.run_grid_search import main as main_run_grid_search
+        from run.pipelines.run_grid_search import main as main_run_grid_search
+        from .builder import GeneratorPipelineBuilders
         main_run_grid_search(builder, temperature_values=t, max_depth_values=d, topk_len_values=k, max_samples=max_samples)
         
     @app.command()
@@ -51,7 +52,7 @@ def run_app(builder):
         Usage: 
             python custom.py run-benchmark --bench-name=mt-bench
         """
-        from .pipelines.run_benchmark import main as main_run_benchmark
+        from run.pipelines.run_benchmark import main as main_run_benchmark
         main_run_benchmark(builder, benchmarks=benchmarks, max_samples=max_samples)
         
     @app.command()
@@ -61,7 +62,7 @@ def run_app(builder):
         Usage: 
             python custom.py run-benchmark --bench-name=mt-bench
         """
-        from .pipelines.run_benchmark_acc import main as main_run_benchmark_acc
+        from run.pipelines.run_benchmark_acc import main as main_run_benchmark_acc
         main_run_benchmark_acc(builder, benchmarks=benchmarks, max_samples=max_samples)
 
     @app.command()
@@ -71,7 +72,7 @@ def run_app(builder):
         Usage: 
             python custom.py run-benchmark --bench-name=mt-bench
         """
-        from .pipelines.run_benchmark_agent import main as main_run_benchmark_agent
+        from run.pipelines.run_benchmark_agent import main as main_run_benchmark_agent
         main_run_benchmark_agent(builder, benchmarks=benchmarks, max_samples=max_samples)
 
     @app.command()
