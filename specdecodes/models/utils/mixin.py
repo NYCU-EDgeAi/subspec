@@ -5,12 +5,12 @@ import os
 import time
 import prettytable as pt
 import csv
+from .wandb_logger import wandb_logger
 
 class ProfilingMixin:
     def __init__(self, *args, profiling: bool = True, profiling_verbose: bool = False, **kwargs):
         self.profiling = profiling
         self.profiling_verbose = profiling_verbose
-        self.exp_log = {}
         super().__init__(*args, **kwargs)
 
     def _generate(self, input_ids: torch.LongTensor, *args, **kwargs):
@@ -37,9 +37,9 @@ class ProfilingMixin:
         n_generated_tokens = output_ids.shape[1] - org_input_len
         throughput = n_generated_tokens / elapsed_time_s if elapsed_time_s > 0 else 0
 
-        self.exp_log['n_tokens'] = n_generated_tokens
-        self.exp_log['elapsed_time'] = elapsed_time_s
-        self.exp_log['tput'] = throughput
+        wandb_logger.log_data['n_tokens'] = n_generated_tokens
+        wandb_logger.log_data['elapsed_time'] = elapsed_time_s
+        wandb_logger.log_data['tput'] = throughput
 
         if self.profiling_verbose:
             logging.info(
@@ -65,7 +65,6 @@ class SDProfilingMixin:
         self.post_verify_events = []
         
         self.profiling = profiling
-        self.exp_log = {}
         super().__init__(*args, **kwargs)
         
     def _post_verify(self, *model_args, **kwargs):
@@ -211,7 +210,8 @@ class SDProfilingMixin:
         self.iter_count = 1 # assume first step is done (prefill stage)
         if os.environ.get("DETAILED_ANALYSIS", "False") == "True":
             self.detaild_data = []
-        self.exp_log = {}
+        wandb_logger.log_data.clear()
+
         self.draft_events = []
         self.target_events = []
         self.verify_events = []
@@ -294,25 +294,25 @@ class SDProfilingMixin:
                 
         # save exp_log
         avg_draft_s, avg_target_s, avg_verify_s = self.compute_average_times()
-        self.exp_log['avg_draft_time'] = avg_draft_s
-        self.exp_log['avg_target_time'] = avg_target_s
-        self.exp_log['avg_verify_time'] = avg_verify_s
+        wandb_logger.log_data['avg_draft_time'] = avg_draft_s
+        wandb_logger.log_data['avg_target_time'] = avg_target_s
+        wandb_logger.log_data['avg_verify_time'] = avg_verify_s
         
-        self.exp_log['avg_sampled'] = avg_sampled
-        self.exp_log['n_iter'] = total_iterations
-        self.exp_log['n_tokens'] = len(input_ids[0][org_input_len:])
-        self.exp_log['elapsed_time'] = elapsed_time_s
-        self.exp_log['tput'] = len(input_ids[0][org_input_len:]) / elapsed_time_s
-        if self.exp_log.get('skip_spec_count', None) is not None:
-            self.exp_log['skip_spec_count'] = self.skip_spec_count
-            self.exp_log['regular_count'] = self.regular_count
-            self.exp_log['spec_skip_rate'] = self.skip_spec_count / (self.skip_spec_count + self.regular_count)
+        wandb_logger.log_data['avg_sampled'] = avg_sampled
+        wandb_logger.log_data['n_iter'] = total_iterations
+        wandb_logger.log_data['n_tokens'] = len(input_ids[0][org_input_len:])
+        wandb_logger.log_data['elapsed_time'] = elapsed_time_s
+        wandb_logger.log_data['tput'] = len(input_ids[0][org_input_len:]) / elapsed_time_s
+        if wandb_logger.log_data.get('skip_spec_count', None) is not None:
+            wandb_logger.log_data['skip_spec_count'] = self.skip_spec_count
+            wandb_logger.log_data['regular_count'] = self.regular_count
+            wandb_logger.log_data['spec_skip_rate'] = self.skip_spec_count / (self.skip_spec_count + self.regular_count)
         
         if self.profiling_verbose:
             logging.info(
-                f"Average draft time: {self.exp_log['avg_draft_time']:.4f},"\
-                f"\tAverage target time: {self.exp_log['avg_target_time']:.4f},"\
-                f"\tAverage verify time: {self.exp_log['avg_verify_time']:.4f}"
-                f"\nGenerated {self.exp_log['n_tokens']} tokens in {elapsed_time_s:.2f}s, throughput: {self.exp_log['tput']:.2f} tokens/s"
+                f"Average draft time: {wandb_logger.log_data['avg_draft_time']:.4f},"\
+                f"\tAverage target time: {wandb_logger.log_data['avg_target_time']:.4f},"\
+                f"\tAverage verify time: {wandb_logger.log_data['avg_verify_time']:.4f}"
+                f"\nGenerated {wandb_logger.log_data['n_tokens']} tokens in {elapsed_time_s:.2f}s, throughput: {wandb_logger.log_data['tput']:.2f} tokens/s"
             )
         return input_ids

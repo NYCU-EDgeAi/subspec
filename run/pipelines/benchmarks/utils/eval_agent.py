@@ -9,6 +9,7 @@ import logging
 
 from smolagents import CodeAgent, ToolCallingAgent
 from specdecodes.helpers.wrappers import SpecDecodesModel
+from specdecodes.models.utils.wandb_logger import wandb_logger
 
 def run_agent_eval(generator, tokenizer, past_key_values, draft_past_key_values, args, dataset, log_dir):
     print("Running agent eval...")
@@ -47,7 +48,7 @@ def run_agent_eval(generator, tokenizer, past_key_values, draft_past_key_values,
         if draft_past_key_values is not None:
             draft_past_key_values.reset()
 
-        exp_log = {**generator.exp_log, "query": query, "response": output_message, "peak_mem": torch.cuda.max_memory_reserved(args.device)/(1024**3)}
+        exp_log = {**wandb_logger.log_data, "query": query, "response": output_message, "peak_mem": torch.cuda.max_memory_reserved(args.device)/(1024**3)}
         with open(log_file, 'a+') as f:
             json.dump(exp_log, f, indent=4)
             f.write("\n")
