@@ -9,6 +9,7 @@ import logging
 
 from smolagents import CodeAgent, ToolCallingAgent
 from specdecodes.helpers.wrappers import SpecDecodesModel
+from specdecodes.models.utils.wandb_logger import wandb_logger
 
 def run_common_eval(generator, tokenizer, past_key_values, draft_past_key_values, args, dataset, log_dir):
     # Warm up the model
@@ -55,7 +56,7 @@ def run_common_eval(generator, tokenizer, past_key_values, draft_past_key_values
             draft_past_key_values.reset()
 
         output_message = tokenizer.decode(output_ids[0][input_ids.shape[1]:])
-        exp_log = {**generator.exp_log, "query": query, "response": output_message, "peak_memory": torch.cuda.max_memory_reserved(args.device)/(1024**3)}
+        exp_log = {**wandb_logger.log_data, "query": query, "response": output_message, "peak_memory": torch.cuda.max_memory_reserved(args.device)/(1024**3)}
         with open(log_file, 'a+') as f:
             json.dump(exp_log, f, indent=4)
             f.write("\n")
@@ -155,22 +156,22 @@ def run_mtbench_eval(generator, tokenizer, past_key_values, draft_past_key_value
             
             output_message = tokenizer.decode(output_ids[0][input_ids.shape[1]:])
 
-            n_iter = generator.exp_log.get('n_iter', 0)
-            n_tokens = generator.exp_log.get('n_tokens', 0)
-            elapsed_time = generator.exp_log.get('elapsed_time', 0)
+            n_iter = wandb_logger.log_data.get('n_iter', 0)
+            n_tokens = wandb_logger.log_data.get('n_tokens', 0)
+            elapsed_time = wandb_logger.log_data.get('elapsed_time', 0)
             
             tmp_exp_log['n_iter'] += n_iter
             tmp_exp_log['n_tokens'] += n_tokens
             tmp_exp_log['elapsed_time'] += elapsed_time
             
-            tmp_exp_log['total_sampled'] += np.round(generator.exp_log.get('avg_sampled', 0) * n_iter, decimals=0)
-            tmp_exp_log['total_draft_time'] += generator.exp_log.get('avg_draft_time', 0) * n_iter
-            tmp_exp_log['total_target_time'] += generator.exp_log.get('avg_target_time', 0) * n_iter
-            tmp_exp_log['total_verify_time'] += generator.exp_log.get('avg_verify_time', 0) * n_iter
-            tmp_exp_log['skip_spec_count'] += generator.exp_log.get('skip_spec_count', 0)
-            tmp_exp_log['regular_count'] += generator.exp_log.get('regular_count', 0)
+            tmp_exp_log['total_sampled'] += np.round(wandb_logger.log_data.get('avg_sampled', 0) * n_iter, decimals=0)
+            tmp_exp_log['total_draft_time'] += wandb_logger.log_data.get('avg_draft_time', 0) * n_iter
+            tmp_exp_log['total_target_time'] += wandb_logger.log_data.get('avg_target_time', 0) * n_iter
+            tmp_exp_log['total_verify_time'] += wandb_logger.log_data.get('avg_verify_time', 0) * n_iter
+            tmp_exp_log['skip_spec_count'] += wandb_logger.log_data.get('skip_spec_count', 0)
+            tmp_exp_log['regular_count'] += wandb_logger.log_data.get('regular_count', 0)
             
-            exp_log = {**exp_log, tid: {**generator.exp_log, "query": query, "response": output_message, "peak_memory": torch.cuda.max_memory_reserved(args.device)/(1024**3)}}
+            exp_log = {**exp_log, tid: {**wandb_logger.log_data, "query": query, "response": output_message, "peak_memory": torch.cuda.max_memory_reserved(args.device)/(1024**3)}}
             messages.append({"role": "system", "content": output_message})
             
             # # log spec_skip/regular count

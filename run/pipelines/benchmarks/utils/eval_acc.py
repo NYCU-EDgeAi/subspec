@@ -18,6 +18,7 @@ from .utils import (
     count_score,
     code_sim_score,
 )
+from specdecodes.models.utils.wandb_logger import wandb_logger
 
 dataset2metric = {
     "narrativeqa": qa_f1_score,
@@ -136,7 +137,7 @@ def run_gsm8k_eval(generator, tokenizer, past_key_values, draft_past_key_values,
             draft_past_key_values.reset()
 
         # 2.2 Extract original performance logs
-        record = {**generator.exp_log}
+        record = {**wandb_logger.log_data}
         record.update({
             "query": prompt,
             "response": tokenizer.decode(
@@ -310,7 +311,7 @@ def run_aime_eval(generator, tokenizer,
 
         # Build record
         record = {
-            **generator.exp_log,
+            **wandb_logger.log_data,
             "query": prompt,
             "response": response,
             "answer": ground_truth,
@@ -447,7 +448,7 @@ def run_mmlu_pro_eval(generator, tokenizer,
 
         # build record
         record = {
-            **generator.exp_log,
+            **wandb_logger.log_data,
             "query": prompt,
             "response": resp,
             "answer": gt,
@@ -682,7 +683,7 @@ def run_livecodebench_eval(
         
         # ... (Your logging and metric accumulation code remains the same) ...
         record = {
-            **generator.exp_log,
+            **wandb_logger.log_data,
             "query": prompt,
             "responses": responses,
             "graded_list": graded_list,
