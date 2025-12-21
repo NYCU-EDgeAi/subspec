@@ -41,21 +41,46 @@ pip install -e .
 
 ## Evaluation
 
-To evaluate the performance of SubSpec, you can use the provided `run.sh` script.
-```eval
-bash run.sh <pipeline path> run-benchmark --benchmarks <benchmarks> --max-samples 20
-```
-All experiment pipelines conducted in this work are located in the run/exp_offload directory.
+To evaluate the performance of SubSpec and other methods, use the unified entry point `run.main`:
 
-For example, to evaluate SubSpec on Qwen2.5 7B Instruct on MT-Bench and GSM8K, run:
 ```bash
-bash run.sh run.exp_offloading.subspec_sd_qwen_7b run-benchmark --benchmarks mt-bench,gsm8k --max-samples 20
+# Basic usage
+python -m run.main --method <method_name> run-test
+
+# Running detailed benchmarks
+python -m run.main --method <method_name> run-benchmark --benchmarks <benchmarks> --max-samples 20
 ```
 
-There are a total of 9 selectable benchmarks:
+### Available Methods
+The following methods are available (registered in `run/core/registers.py`):
+- `subspec_sd`: Substitute Speculative Decoding (Offloading + HQQ Quantization)
+- `classic_sd`: Standard Speculative Decoding
+- `vanilla`: Base LLM inference (no speculative decoding)
+- `eagle_sd`: EAGLE Speculative Decoding
+- ...and others (`subspec_sd_v2`, `subspec_sd_no_offload`, etc.)
+
+### Common Arguments
+- `--method`: The decoding method to use (required for defaults).
+- `--device`: Target device (e.g., `cuda:0`, `cuda:1`). Defaults to `cuda:0`.
+- `--warmup-iter`: Number of warmup iterations. Default varies by method (typically 1).
+- `--compile-mode`: Torch compile mode (e.g., `reduce-overhead`, `max-autotune`, or `none`). Defaults to `none` (or method-specific default).
+
+### Examples
+
+**1. Evaluate SubSpec on MT-Bench with specific GPU:**
+```bash
+python -m run.main --method subspec_sd --device "cuda:0" run-benchmark --benchmarks mt-bench --max-samples 20
+```
+
+**2. Run a quick test with Classic SD on a different GPU:**
+```bash
+python -m run.main --method classic_sd --device "cuda:1" --warmup-iter 0 run-test
+```
+
+**9. Selectable Benchmarks:**
 "mt-bench", "human-eval", "gsm8k", "alpaca", "cnn-dm", "aime", "gpqa", "math-500", and "livecodebench".
 
-> the datasets and pretrained models will be downloaded automatically from Hugging Face.
+> The datasets and pretrained models will be downloaded automatically from Hugging Face.
 
 ## Results
 
