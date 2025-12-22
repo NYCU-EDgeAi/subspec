@@ -16,7 +16,7 @@ class EagleSDGeneratorBase(ClassicSDGeneratorBase):
             hidden_states=hidden_states,
         )
 
-    def _tree_decoding(self, tree, tree_mask, past_key_values, position_offset, cache_position, device):
+    def _tree_decoding(self, tree, past_key_values, position_offset, cache_position, device):
         # Preparing target_model's tree decoding data, also updates each node's index (node.ind).
         with nvtx.annotate("create attn mask"):
             node_data = tree.get_tree_data()
@@ -32,7 +32,7 @@ class EagleSDGeneratorBase(ClassicSDGeneratorBase):
         
         # Assing to tree mask
         with nvtx.annotate("get mask"):
-            tree_mask = self._get_tree_mask(tree_mask, tree_mask_partial)
+            tree_mask = self._get_tree_mask(tree_mask_partial)
             tree_mask = invert_mask(tree_mask, dtype=self.target_model.model.dtype)
         
         # llm forward
@@ -107,7 +107,7 @@ class EagleSDGeneratorBase(ClassicSDGeneratorBase):
             
         if model_kwargs.get("past_key_values") is not None and model_kwargs.get("draft_past_key_values") is not None:
             past_key_values = model_kwargs["past_key_values"]
-            max_cache_len = getattr(past_key_values, "max_cache_len", None)
+            max_cache_len = getattr(past_key_values.cache, "max_cache_len", None)
             
             draft_past_key_values = model_kwargs["draft_past_key_values"]
             self.draft_model.set_past_key_values(draft_past_key_values)

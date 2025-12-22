@@ -22,6 +22,10 @@ class HuggingFaceGeneratorBase(GeneratorBase):
             self.target_model.generation_config.cache_implementation = None
         else:
             self.target_model.generation_config.cache_implementation = self.cache_implementation
+        # Let HF manage its own cache.
+        if 'past_key_values' in kwargs:
+            kwargs.pop('past_key_values')
+
         return self.target_model.generate(
             input_ids=input_ids,
             temperature=temperature,

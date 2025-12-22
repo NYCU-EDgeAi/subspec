@@ -1,5 +1,14 @@
 import sys
 import argparse
+
+# Monkey patch for auto_gptq compatibility with optimum
+try:
+    import auto_gptq
+    if not hasattr(auto_gptq, "QuantizeConfig") and hasattr(auto_gptq, "BaseQuantizeConfig"):
+        auto_gptq.QuantizeConfig = auto_gptq.BaseQuantizeConfig
+except ImportError:
+    pass
+
 from .core.configuration import AppConfig
 from .core.registry import ModelRegistry
 from .core.presets import register_presets

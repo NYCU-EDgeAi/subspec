@@ -52,10 +52,14 @@ def flashinfer_load_draft_model(builder, target_model, tokenizer, draft_model_pa
     return draft_model
 
 def eagle_load_draft_model(builder, target_model, tokenizer, draft_model_path):
+    import os
     entry = ModelRegistry.get(builder.config.method)
     draft_model_cls = entry.draft_model_cls
     
     # Eagle usually needs .to(device) explicitly if device_map is not passed or if it behaves differently
+    # Expand path just in case
+    draft_model_path = os.path.abspath(os.path.expanduser(draft_model_path))
+    
     draft_model = draft_model_cls.from_pretrained(
         draft_model_path,
         target_model=target_model,
@@ -72,7 +76,7 @@ def quant_load_model(builder, model_path):
     # Defaulting to behavior extracted from original other_quant.py
     model = AutoModelForCausalLM.from_pretrained(
         model_path,
-        attn_implementation="flash_attention_2",
+        attn_implementation="sdpa",
         device_map="auto",
         quantization_config=GPTQConfig(bits=4, backend="triton")
     )
