@@ -82,6 +82,22 @@ def run_app(builder):
         Usage:
             python custom.py run-gradio
         """
-        print(f"Running Gradio")
+        from run.pipelines.run_gradio import main as run_gradio_main
+        run_gradio_main(builder)
+
+    @app.command()
+    def run_api(
+        host: str = typer.Option("0.0.0.0", help="Host to bind the API server"),
+        port: int = typer.Option(8000, help="Port to bind the API server"),
+        workers: int = typer.Option(1, help="Number of Uvicorn workers (use 1 for GPU models)"),
+        log_level: str = typer.Option("info", help="Uvicorn log level"),
+    ):
+        """Launch an OpenAI-compatible HTTP server.
+
+        Usage:
+            python -m run.main --method subspec_sd run-api --host 0.0.0.0 --port 8000
+        """
+        from run.pipelines.run_api import main as run_api_main
+        run_api_main(builder, host=host, port=port, workers=workers, log_level=log_level)
 
     app()

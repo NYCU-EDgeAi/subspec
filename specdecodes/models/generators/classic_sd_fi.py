@@ -269,6 +269,8 @@ class ClassicSDGeneratorBase(GeneratorBase):
                 # self.draft_model.set_past_key_values(draft_past_key_values)
         else:
             raise ValueError("past_key_values and draft_past_key_values should both be provided")
+
+        stream_callback = model_kwargs.get("stream_callback", None)
         
         # * prefill stage
         with nvtx.annotate("chunked prefill", color="orange"):
@@ -355,6 +357,7 @@ class ClassicSDGeneratorBase(GeneratorBase):
         with nvtx.annotate("update data"):
             input_ids = torch.cat([input_ids, sampled_tokens], dim=-1)
             cache_position = torch.arange(org_input_len, org_input_len+self.draft_params.max_verify_tokens, dtype=torch.long, device=input_ids.device)
+            self._maybe_stream(stream_callback, sampled_tokens)
         with nvtx.annotate("decoding"):
             finished = False
             while not finished:
@@ -394,6 +397,7 @@ class ClassicSDGeneratorBase(GeneratorBase):
                 with nvtx.annotate("update data"):
                     input_ids = torch.cat([input_ids, sampled_tokens], dim=-1)
                     cache_position += sampled_tokens.shape[1]
+                    self._maybe_stream(stream_callback, sampled_tokens)
                 
                 # * check stopping criteria
                 with nvtx.annotate("stopping criteria"):

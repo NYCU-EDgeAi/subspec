@@ -42,6 +42,8 @@ class NaiveGeneratorBase(GeneratorBase):
         else:
             raise ValueError("past_key_values should be provided")
 
+        stream_callback = model_kwargs.get("stream_callback", None)
+
         kv_len = past_key_values.get_seq_length()
         cache_position = torch.arange(kv_len, input_len, dtype=torch.long, device=input_ids.device)
 
@@ -86,6 +88,7 @@ class NaiveGeneratorBase(GeneratorBase):
         with nvtx.annotate("update data"):
             input_ids = torch.cat([input_ids, next_tokens], dim=-1)
             cache_position = cache_position[-1:] + 1
+            self._maybe_stream(stream_callback, next_tokens)
 
         # Decoding loop
         with nvtx.annotate("decoding"):
@@ -107,6 +110,7 @@ class NaiveGeneratorBase(GeneratorBase):
                     input_ids = torch.cat([input_ids, next_tokens], dim=-1)
                     cache_position += 1
                     past_key_values.seq_len += 1
+                    self._maybe_stream(stream_callback, next_tokens)
 
                 with nvtx.annotate("stopping criteria"):
                     finished = stopping_criteria(input_ids, None)

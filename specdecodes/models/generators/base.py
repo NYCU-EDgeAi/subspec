@@ -162,6 +162,7 @@ class GeneratorBase(nn.Module):
         max_length=None,
         do_sample=True,
         stop_strings=None,
+        stream_callback=None,
         **model_kwargs,
     ):        
         # 1. prepare stopping criteria
@@ -183,6 +184,8 @@ class GeneratorBase(nn.Module):
         )
         
         # 3. generate
+        if stream_callback is not None:
+            model_kwargs["stream_callback"] = stream_callback
         results = self._generate(
             input_ids=input_ids,
             stopping_criteria=stopping_criteria,
@@ -191,6 +194,11 @@ class GeneratorBase(nn.Module):
             **model_kwargs,
         )
         return results
+
+    def _maybe_stream(self, stream_callback, token_ids: torch.LongTensor):
+        if stream_callback is None:
+            return
+        stream_callback(token_ids)
     
     def create_kv_cache(
         self,

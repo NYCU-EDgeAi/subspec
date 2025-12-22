@@ -52,7 +52,7 @@ python -m run.main --method <method_name> run-benchmark --benchmarks <benchmarks
 ```
 
 ### Available Methods
-The following methods are available (registered in `run/core/registers.py`):
+The following methods are available (registered in `run/core/presets.py`):
 - `subspec_sd`: Substitute Speculative Decoding (Offloading + HQQ Quantization)
 - `classic_sd`: Standard Speculative Decoding
 - `vanilla`: Base LLM inference (no speculative decoding)
@@ -98,3 +98,64 @@ Below is the result for accelerating Qwen2.5 7B with tree-based speculative deco
 
 
 > For EAGLE's draft model, you will need to download the pretrained model manually, then convert it with the 'convert_eagle_weights.ipynb' script before use.
+
+## OpenAI-Compatible API Server
+
+This repo includes an OpenAI-compatible HTTP server implemented in [run/pipelines/run_api.py](run/pipelines/run_api.py).
+
+### Run the server
+
+1) Activate your environment:
+
+```bash
+conda activate ~/envs/subspec
+```
+
+2) Start the server via the unified entry point:
+
+```bash
+python -m run.main --method <method_name> run-api --host 0.0.0.0 --port 8000
+```
+
+### Example: `eagle_sd`
+
+`eagle_sd` requires both a target model (`--llm-path`) and a draft model (`--draft-model-path`). The default draft path in the preset is:
+
+```text
+~/checkpoints/eagle/official/EAGLE-Llama-3.1-8B-Instruct
+```
+
+Run:
+
+```bash
+python -m run.main \
+	--method eagle_sd \
+	--llm-path meta-llama/Llama-3.1-8B-Instruct \
+	--draft-model-path ~/checkpoints/eagle/official/EAGLE-Llama-3.1-8B-Instruct \
+	--device cuda:0 \
+	--warmup-iter 0 \
+	run-api --host 0.0.0.0 --port 8000
+```
+
+### Quick API checks
+
+```bash
+curl http://127.0.0.1:8000/health
+curl http://127.0.0.1:8000/v1/models
+```
+
+Chat completions (non-stream):
+
+```bash
+curl -s http://127.0.0.1:8000/v1/chat/completions \
+	-H 'Content-Type: application/json' \
+	-d '{"messages":[{"role":"user","content":"Say OK"}],"max_tokens":16,"temperature":0}' | jq .
+```
+
+Chat completions (stream):
+
+```bash
+curl -N http://127.0.0.1:8000/v1/chat/completions \
+	-H 'Content-Type: application/json' \
+	-d '{"messages":[{"role":"user","content":"Count to three"}],"max_tokens":32,"temperature":0,"stream":true}'
+```
