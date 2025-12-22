@@ -154,6 +154,8 @@ class SubSpecSDGeneratorBase(ClassicSDGeneratorBase):
         else:
             raise ValueError("past_key_values is not provided")
 
+        stream_callback = model_kwargs.get("stream_callback", None)
+
         # * prefill stage
         with nvtx.annotate("chunked prefill", color="orange"):
             self._init_tree_mask(self.draft_params.max_verify_tokens, max_cache_len, device=input_ids.device)
@@ -227,6 +229,7 @@ class SubSpecSDGeneratorBase(ClassicSDGeneratorBase):
         with nvtx.annotate("update data"):
             input_ids = torch.cat([input_ids, sampled_tokens], dim=-1)
             cache_position = torch.arange(org_input_len, org_input_len+self.draft_params.max_verify_tokens, dtype=torch.long, device=input_ids.device)
+            self._maybe_stream(stream_callback, sampled_tokens)
 
         with nvtx.annotate("decoding"):
             finished = False

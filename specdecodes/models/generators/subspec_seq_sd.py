@@ -66,6 +66,8 @@ class SubSpecSDGeneratorBase(ClassicSDGeneratorBase):
         else:
             raise ValueError("past_key_values is not provided")
 
+        stream_callback = model_kwargs.get("stream_callback", None)
+
         # * prefill stage
         with nvtx.annotate("chunked prefill", color="orange"):
             current_kv_len = past_key_values.get_seq_length()
@@ -112,6 +114,7 @@ class SubSpecSDGeneratorBase(ClassicSDGeneratorBase):
         with nvtx.annotate("update data"):
             input_ids = torch.cat([input_ids, sampled_tokens], dim=-1)
             cache_position = torch.arange(org_input_len, org_input_len+self.draft_params.max_verify_tokens, dtype=torch.long, device=input_ids.device)
+            self._maybe_stream(stream_callback, sampled_tokens)
 
         with nvtx.annotate("decoding"):
             finished = False
@@ -155,6 +158,10 @@ class SubSpecSDGeneratorBase(ClassicSDGeneratorBase):
                             prune_tokens = sampled_tokens.shape[1]-k-1
                             input_ids = input_ids[:, :-prune_tokens] if prune_tokens > 0 else input_ids
                             break
+
+                kept = sampled_tokens if prune_tokens == 0 else sampled_tokens[:, : sampled_tokens.shape[1] - prune_tokens]
+                if kept.numel() > 0:
+                    self._maybe_stream(stream_callback, kept)
                                 
                 with nvtx.annotate("update kv-cache"):
                     if self.cache_implementation == 'dynamic':

@@ -25,6 +25,9 @@ class HuggingFaceGeneratorBase(GeneratorBase):
         # Let HF manage its own cache.
         if 'past_key_values' in kwargs:
             kwargs.pop('past_key_values')
+        # Not supported via this wrapper (handled at API layer if needed)
+        if 'stream_callback' in kwargs:
+            kwargs.pop('stream_callback')
 
         return self.target_model.generate(
             input_ids=input_ids,

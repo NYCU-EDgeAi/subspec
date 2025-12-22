@@ -9,7 +9,7 @@
 # Description:
 #   This script adds numerous flags before running the selected Python script.
 
-CUDA_VISIBLE_DEVICES=0
+CUDA_VISIBLE_DEVICES="0,1,2,3"
 LOGLEVEL=INFO
 
 # NVTX_PROFILING=True
