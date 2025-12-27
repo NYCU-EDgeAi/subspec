@@ -155,6 +155,7 @@ def register_presets():
     # SubSpec SD V2
     try:
         from specdecodes.models.generators.subspec_sd_v2 import SubSpecSDGenerator as SubSpecSDGeneratorV2
+        from specdecodes.models.generators.subspec_lossy_sd_v2 import SubSpecLossySDGenerator
         from specdecodes.helpers.recipes.subspec.hqq_4bit_attn_4bit_mlp_postspec import Recipe as SubSpecRecipeV2
         
         ModelRegistry.register(
@@ -171,6 +172,29 @@ def register_presets():
                 "warmup_iter": 3,
                 "generator_profiling": True,
             }
+        )
+
+        # SubSpec SD V2 (Lossy bottom-up verification)
+        ModelRegistry.register(
+            name="subspec_lossy_sd_v2",
+            generator_cls=SubSpecLossySDGenerator,
+            draft_model_cls=SubSpecSDDraftModel,
+            default_config={
+                "llm_path": "meta-llama/Llama-3.1-8B-Instruct",
+                "max_length": 10 * 1024,
+                "generator_kwargs": {"prefill_chunk_size": 4096},
+                "draft_params": DraftParams(
+                    temperature=0.2,
+                    max_depth=16,
+                    topk_len=6,
+                    lossy_threshold=0.3,
+                    lossy_window_size=6,
+                ),
+                "recipe": SubSpecRecipeV2(),
+                "cache_implementation": "static",
+                "warmup_iter": 1,
+                "generator_profiling": True,
+            },
         )
     except ImportError:
         pass
@@ -206,6 +230,7 @@ def register_presets():
     try:
         from specdecodes.models.generators.subspec_sd_fi import SubSpecSDGenerator as SubSpecSDGeneratorFI
         from specdecodes.models.draft_models.subspec_sd_fi import SubSpecSDDraftModel as SubSpecSDDraftModelFI
+        from specdecodes.helpers.recipes.subspec.hqq_4bit_attn_4bit_mlp import Recipe as SubSpecRecipe
 
         ModelRegistry.register(
             name="subspec_sd_fi",
@@ -257,6 +282,7 @@ def register_presets():
     try:
         from specdecodes.models.generators.subspec_seq_sd import SubSpecSDGenerator as SubSpecSDGeneratorSeq
         from specdecodes.models.draft_models.subspec_seq_sd import SubSpecSDDraftModel as SubSpecSDDraftModelSeq
+        from specdecodes.helpers.recipes.subspec.hqq_4bit_attn_4bit_mlp import Recipe as SubSpecRecipe
 
         ModelRegistry.register(
             name="subspec_seq_sd",
@@ -280,6 +306,7 @@ def register_presets():
     # SubSpec SD Seq V2
     try:
         from specdecodes.models.generators.subspec_seq_sd_v2 import SubSpecSDGenerator as SubSpecSDGeneratorSeqV2
+        from specdecodes.helpers.recipes.subspec.hqq_4bit_attn_4bit_mlp_postspec import Recipe as SubSpecRecipeV2
         
         ModelRegistry.register(
             name="subspec_seq_sd_v2",
@@ -302,6 +329,8 @@ def register_presets():
 
     # SubSpec SD No Offload
     try:
+        from specdecodes.models.generators.subspec_sd import SubSpecSDGenerator
+        from specdecodes.models.draft_models.subspec_sd import SubSpecSDDraftModel
         from specdecodes.helpers.recipes.subspec.hqq_4bit_attn_4bit_mlp_no_offload import Recipe as SubSpecRecipeNoOffload
         
         ModelRegistry.register(
@@ -340,7 +369,7 @@ def register_presets():
                 "draft_params": DraftParams(temperature=1, max_depth=6, topk_len=10),
                 "recipe": None,
                 "cache_implementation": "static",
-                "warmup_iter": 3,
+                "warmup_iter": 1,
                 "compile_mode": None,
                 "generator_profiling": True,
             },
@@ -374,6 +403,7 @@ def register_presets():
     # Share Layer SD
     try:
         from specdecodes.models.draft_models.share_layer_sd import ShareLayerSDDraftModel
+        from specdecodes.helpers.recipes.subspec.hqq_4bit_attn_4bit_mlp import Recipe as SubSpecRecipe
         
         ModelRegistry.register(
             name="share_layer_sd",
@@ -390,6 +420,37 @@ def register_presets():
                 "compile_mode": None,
                 "generator_profiling": True,
             }
+        )
+    except ImportError:
+        pass
+
+    # SubSpec SD (Lossy bottom-up verification, v1)
+    try:
+        from specdecodes.models.generators.subspec_lossy_sd import SubSpecLossySDGenerator
+        from specdecodes.models.draft_models.subspec_sd import SubSpecSDDraftModel
+        from specdecodes.helpers.recipes.subspec.hqq_4bit_attn_4bit_mlp import Recipe as SubSpecRecipe
+
+        ModelRegistry.register(
+            name="subspec_lossy_sd",
+            generator_cls=SubSpecLossySDGenerator,
+            draft_model_cls=SubSpecSDDraftModel,
+            default_config={
+                "llm_path": "meta-llama/Llama-3.2-1B-Instruct",
+                "max_length": 2 * 1024,
+                "generator_kwargs": {"prefill_chunk_size": 4096},
+                "draft_params": DraftParams(
+                    temperature=0.2,
+                    max_depth=32,
+                    topk_len=6,
+                    lossy_threshold=0.3,
+                    lossy_window_size=6,
+                ),
+                "recipe": SubSpecRecipe(),
+                "cache_implementation": "static",
+                "warmup_iter": 1,
+                "compile_mode": None,
+                "generator_profiling": True,
+            },
         )
     except ImportError:
         pass

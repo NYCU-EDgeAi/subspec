@@ -4,6 +4,7 @@ from tqdm import trange
 import logging
 import os
 import nvtx
+import random
 
 def main(builder):
     generator, tokenizer, past_kv, draft_past_kv = builder.build()
@@ -15,6 +16,8 @@ def main(builder):
 
     # deterministic
     torch.manual_seed(args.seed)
+    torch.cuda.manual_seed_all(args.seed)
+    random.seed(args.seed)
 
     # warm up
     if args.warmup_iter > 0:

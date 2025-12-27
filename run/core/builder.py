@@ -55,9 +55,10 @@ class GeneratorPipelineBuilder:
         """
         torch.manual_seed(self.seed)
         random.seed(self.seed)
+        torch.cuda.set_device(self.device)
+        torch.cuda.manual_seed_all(self.seed)
         
         # Set memory limit.
-        torch.cuda.set_device(self.device)
         total_memory = torch.cuda.get_device_properties(self.device).total_memory
         if self.vram_limit_gb is not None:
             memory_fraction = min(1.0, float(self.vram_limit_gb * (1024**3))/total_memory)
@@ -198,7 +199,15 @@ class GeneratorPipelineBuilder:
         Compile the generator's forward methods.
         """
         logging.info(f"Compiling generator with mode: {self.compile_mode}")
-        generator.target_model.forward = torch.compile(generator.target_model.forward, mode=self.compile_mode, dynamic=False, fullgraph=True)
+
+        # If the target model uses offloading, torch.compile() (especially fullgraph/cudagraph-related paths)
+        # is typically incompatible or provides little benefit. Skip compiling target_model in that case.
+        has_offloader = bool(getattr(self.recipe, "offloader", None))
+        if has_offloader:
+            logging.info("Skipping torch.compile() for target_model because recipe.offloader is set.")
+        else:
+            generator.draft_model.forward = torch.compile(generator.draft_model.forward, mode=self.compile_mode, dynamic=False, fullgraph=True)
+
         if getattr(generator, 'draft_model', None) is not None:
             generator.draft_model.forward = torch.compile(generator.draft_model.forward, mode=self.compile_mode, dynamic=False, fullgraph=True)
     

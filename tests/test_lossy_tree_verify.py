@@ -1,0 +1,239 @@
+import torch
+
+from specdecodes.models.utils.lossy_tree_verify import lossy_bottom_up_verify
+
+
+def _make_probs(rows):
+    probs = torch.tensor(rows, dtype=torch.float32)
+    probs = probs / probs.sum(dim=-1, keepdim=True)
+    return probs
+
+
+def test_lossy_verify_exact_match_window0():
+    # Tree:
+    # 0(root)
+    #  ├─ 1(tok=5)
+    #  └─ 2(tok=7)
+    token_ids = torch.tensor([0, 5, 7], dtype=torch.long)
+    parent = torch.tensor([-1, 0, 0], dtype=torch.long)
+    children = [[1, 2], [], []]
+
+    # root predicts 5, child1 predicts 1 (bonus)
+    probs = _make_probs(
+        [
+            [0.01, 0.01, 0.01, 0.01, 0.01, 0.90, 0.01, 0.03, 0.01, 0.01],
+            [0.80, 0.10, 0.02, 0.02, 0.02, 0.01, 0.01, 0.01, 0.00, 0.00],
+            [0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.00],
+        ]
+    )
+
+    sampled, hidden, accept_len = lossy_bottom_up_verify(
+        probs=probs,
+        token_ids=token_ids,
+        parent_indices=parent,
+        children_lists=children,
+        root_index=0,
+        eos_token_id=None,
+        do_sample=False,
+        threshold=0.99,
+        window_size=0,
+    )
+
+    assert accept_len == 1
+    assert sampled.tolist() == [5, 0]  # bonus from node 1 argmax -> 0
+    assert hidden.tolist() == [0, 1]
+
+
+def test_lossy_verify_threshold_acceptance_window0():
+    # Tree: root -> child(tok=5)
+    token_ids = torch.tensor([0, 5], dtype=torch.long)
+    parent = torch.tensor([-1, 0], dtype=torch.long)
+    children = [[1], []]
+
+    # root argmax is 9, but P(5)=0.45 so it should be accepted with threshold=0.4
+    probs = _make_probs(
+        [
+            [0.0, 0.0, 0.0, 0.0, 0.0, 0.45, 0.0, 0.0, 0.0, 0.55],
+            [0.05, 0.90, 0.01, 0.01, 0.01, 0.01, 0.00, 0.00, 0.00, 0.01],
+        ]
+    )
+
+    sampled, hidden, accept_len = lossy_bottom_up_verify(
+        probs=probs,
+        token_ids=token_ids,
+        parent_indices=parent,
+        children_lists=children,
+        root_index=0,
+        eos_token_id=None,
+        do_sample=False,
+        threshold=0.4,
+        window_size=0,
+    )
+
+    assert accept_len == 1
+    assert sampled[0].item() == 5
+    assert hidden[0].item() == 0
+
+
+def test_lossy_verify_window_lookahead():
+    # Chain: root(0) -> a(5) -> b(9)
+    # With window_size=1, token a can be accepted only if it has 1 future locally-correct node (b).
+    # Note: the lossy verifier is non-regressing vs baseline exact-match.
+    # Even if window gating would reject b (no future lookahead), we fall back to the
+    # baseline exact-match chain when it yields a longer acceptance.
+    token_ids = torch.tensor([0, 5, 9], dtype=torch.long)
+    parent = torch.tensor([-1, 0, 1], dtype=torch.long)
+    children = [[1], [2], []]
+
+    probs = _make_probs(
+        [
+            # root predicts 5
+            [0.01, 0.01, 0.01, 0.01, 0.01, 0.90, 0.01, 0.02, 0.01, 0.01],
+            # a predicts 9
+            [0.01, 0.01, 0.01, 0.01, 0.01, 0.02, 0.01, 0.01, 0.02, 0.90],
+            # b predicts 1 (bonus)
+            [0.01, 0.90, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01],
+        ]
+    )
+
+    sampled, hidden, accept_len = lossy_bottom_up_verify(
+        probs=probs,
+        token_ids=token_ids,
+        parent_indices=parent,
+        children_lists=children,
+        root_index=0,
+        eos_token_id=None,
+        do_sample=False,
+        threshold=0.99,
+        window_size=1,
+    )
+
+    assert accept_len == 2
+    assert sampled.tolist() == [5, 9, 1]  # bonus from node 2 argmax -> 1
+    assert hidden.tolist() == [0, 1, 2]
+
+
+def test_lossy_verify_long_tree_window4_prefers_long_lookahead_branch():
+    # Build a longer, branching tree where a higher-probability branch exists,
+    # but it should be rejected by the window lookahead gating.
+    #
+    # Window semantics in lossy verifier:
+    # window_size=4 means a node is eligible only if there is a downward path
+    # of >= (4 + 1) locally-accepted nodes starting at that node.
+    #
+    # Structure (indices -> token):
+    # 0(root=0)
+    # ├─ 1(tok=5)  [good long chain]
+    # │   ├─ 3(tok=9)   [argmax distractor, leaf]
+    # │   └─ 4(tok=6)
+    # │       ├─ 6(tok=11) [argmax distractor, leaf]
+    # │       └─ 7(tok=7)
+    # │           ├─ 9(tok=13)  [argmax distractor, leaf]
+    # │           └─ 10(tok=14)
+    # │               ├─ 11(tok=15) [argmax distractor, leaf]
+    # │               └─ 12(tok=16)
+    # │                   ├─ 13(tok=17) [argmax distractor, leaf]
+    # │                   └─ 14(tok=18)
+    # │                       └─ 15(tok=19)
+    # │                           └─ 16(tok=4)
+    # └─ 2(tok=8)  [short chain: high prob but fails window gating]
+    #     └─ 5(tok=10)
+    #         └─ 8(tok=12)
+
+    token_ids = torch.tensor(
+        [0, 5, 8, 9, 6, 10, 11, 7, 12, 13, 14, 15, 16, 17, 18, 19, 4],
+        dtype=torch.long,
+    )
+    parent = torch.tensor(
+        [-1, 0, 0, 1, 1, 2, 4, 4, 5, 7, 7, 10, 10, 12, 12, 14, 15],
+        dtype=torch.long,
+    )
+    children = [
+        [1, 2],  # 0
+        [3, 4],  # 1
+        [5],
+        [],
+        [6, 7],
+        [8],
+        [],
+        [9, 10],
+        [],
+        [],
+        [11, 12],
+        [],
+        [13, 14],
+        [],
+        [15],
+        [16],
+        [],
+    ]
+
+    vocab = 20
+
+    def row(main_tok: int, main_p: float, alt_tok: int, alt_p: float):
+        r = [0.0] * vocab
+        r[main_tok] = main_p
+        r[alt_tok] = alt_p
+        # tiny remainder to keep other tokens non-negative after normalization
+        rem = max(0.0, 1.0 - main_p - alt_p)
+        if rem > 0:
+            r[0] += rem
+        return r
+
+    # We set do_sample=False and threshold=0.35.
+    # Clarified window semantics:
+    # - If target token matches a child, accept it (no window gating).
+    # - If target token does NOT match any child, we may accept a non-matching child
+    #   only if prob>=threshold AND we can accept another `window_size` tokens afterward.
+    probs_rows = [
+        # 0: target token=3 (no matching child); lossy may choose 5 if it has long lookahead.
+        # Give tok=5 enough probability to clear the threshold.
+        [0.0] * vocab,
+        row(6, 0.80, 9, 0.10),   # 1: exact match to tok=6 (node 4)
+        row(1, 0.90, 10, 0.05),  # 2: no matching child and low prob for child tok=10 -> short branch dies
+        row(0, 0.90, 1, 0.05),
+        row(7, 0.80, 11, 0.10),  # 4: exact match to tok=7 (node 7)
+        row(1, 0.90, 2, 0.05),
+        row(0, 0.90, 1, 0.05),
+        row(14, 0.80, 13, 0.10), # 7: exact match to tok=14 (node 10)
+        row(0, 0.90, 1, 0.05),
+        row(0, 0.90, 1, 0.05),
+        row(16, 0.80, 15, 0.10), # 10: exact match to tok=16 (node 12)
+        row(0, 0.90, 1, 0.05),
+        row(18, 0.80, 17, 0.10), # 12: exact match to tok=18 (node 14)
+        row(0, 0.90, 1, 0.05),
+        row(19, 0.80, 1, 0.10),  # 14: exact match to tok=19 (node 15)
+        row(4, 0.80, 2, 0.10),   # 15: exact match to tok=4 (node 16)
+        row(15, 0.80, 0, 0.10),  # 16: leaf, bonus would be 15
+    ]
+    probs_rows[0][3] = 0.40
+    probs_rows[0][5] = 0.36
+    probs_rows[0][8] = 0.24
+    probs = _make_probs(probs_rows)
+
+    sampled, hidden, accept_len = lossy_bottom_up_verify(
+        probs=probs,
+        token_ids=token_ids,
+        parent_indices=parent,
+        children_lists=children,
+        root_index=0,
+        eos_token_id=None,
+        do_sample=False,
+        threshold=0.35,
+        window_size=4,
+    )
+
+    # Root has no matching child, so lossy should pick tok=5 (node 1) only if there is
+    # >= window_size future acceptance available.
+    assert accept_len == 8
+    assert sampled.tolist()[:8] == [5, 6, 7, 14, 16, 18, 19, 4]
+    assert sampled.tolist()[-1] == 15  # bonus from node 16 argmax
+    assert hidden.tolist() == [0, 1, 4, 7, 10, 12, 14, 15, 16]
+
+if __name__ == "__main__":
+    print("Running lossy tree verify tests...")
+    test_lossy_verify_exact_match_window0()
+    test_lossy_verify_threshold_acceptance_window0()
+    test_lossy_verify_window_lookahead()
+    test_lossy_verify_long_tree_window4_prefers_long_lookahead_branch()
+    print("All tests passed.")
