@@ -236,8 +236,15 @@ class SubSpecSDGeneratorBase(ClassicSDGeneratorBase):
                     cache_position = torch.arange(position_offset+last_tree_size, position_offset+tree.size(), dtype=torch.long, device=input_ids.device)
                     with nvtx.annotate("post_verify", color="cyan"):
                         tree = self._post_verify(tree, root_ind, past_key_values, position_offset, cache_position, last_tree_depth, skip_nodes, logits_processor, input_ids.device)
-                    
-                    #cache_position = torch.arange(position_offset+last_tree_size, position_offset+tree.size(), dtype=torch.long, device=input_ids.device)
+
+                    # NOTE: `_post_verify` can prune/refill the tree (post-spec), changing `tree.size()`.
+                    # `cache_position` must be recomputed to match the *updated* tree slice we will decode.
+                    cache_position = torch.arange(
+                        position_offset + skip_nodes,
+                        position_offset + tree.size(),
+                        dtype=torch.long,
+                        device=input_ids.device,
+                    )
                     last_tree_size = tree.size()
                     last_tree_depth = tree.get_depth()
 

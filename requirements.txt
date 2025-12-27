@@ -7,3 +7,4 @@ typer==0.15.4
 hqq==0.2.6
 gemlite==0.4.6
 smolagents==1.22.0
+pytest

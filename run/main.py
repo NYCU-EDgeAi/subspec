@@ -1,5 +1,6 @@
 import sys
 import argparse
+import os
 
 # Monkey patch for auto_gptq compatibility with optimum
 try:
@@ -16,6 +17,10 @@ from .core.builder import GeneratorPipelineBuilder
 from .core.router import run_app
 
 def main():
+    # Reduce run-to-run drift from cuBLAS matmul reductions.
+    # Important: set before the first CUDA context initialization.
+    os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":16:8")
+
     # 1. Register presets
     register_presets()
 
@@ -46,11 +51,26 @@ def main():
     full_parser.add_argument("--llm-path", type=str, default=default_config.get("llm_path", "meta-llama/Llama-3.1-8B-Instruct"))
     full_parser.add_argument("--draft-model-path", type=str, default=default_config.get("draft_model_path", None))
     full_parser.add_argument("--max-length", type=int, default=default_config.get("max_length", 2048))
+    full_parser.add_argument("--seed", type=int, default=default_config.get("seed", 0))
     full_parser.add_argument("--device", type=str, default="cuda:0")
     full_parser.add_argument("--compile-mode", type=str, default=default_config.get("compile_mode", None))
     full_parser.add_argument("--temperature", type=float, default=default_config.get("temperature", 0.0))
     full_parser.add_argument("--do-sample", action="store_true", default=default_config.get("do_sample", False))
     full_parser.add_argument("--warmup-iter", type=int, default=default_config.get("warmup_iter", 0))
+
+    # DraftParams overrides (only applied when explicitly provided)
+    full_parser.add_argument(
+        "--lossy-threshold",
+        type=float,
+        default=None,
+        help="Lossy SD: accept non-matching draft token if target prob >= this threshold",
+    )
+    full_parser.add_argument(
+        "--lossy-window-size",
+        type=int,
+        default=None,
+        help="Lossy SD: require this many future locally-correct draft nodes (lookahead)",
+    )
     
     # Parse again with known args to override defaults
     # We still use parse_known_args because run_app (Typer) needs the rest
@@ -68,6 +88,7 @@ def main():
     if config_args.draft_model_path:
         config.draft_model_path = config_args.draft_model_path
     config.max_length = config_args.max_length
+    config.seed = int(config_args.seed)
     config.device = config_args.device
     config.compile_mode = config_args.compile_mode
     if config.compile_mode and config.compile_mode.lower() == "none":
@@ -75,6 +96,19 @@ def main():
     config.temperature = config_args.temperature
     config.do_sample = config_args.do_sample
     config.warmup_iter = config_args.warmup_iter
+
+    # Apply DraftParams overrides.
+    # Note: these are verifier-specific and only affect methods that actually use draft_params.
+    if config_args.lossy_threshold is not None or config_args.lossy_window_size is not None:
+        from specdecodes.models.utils.utils import DraftParams
+
+        if config.draft_params is None:
+            config.draft_params = DraftParams()
+
+        if config_args.lossy_threshold is not None:
+            config.draft_params.lossy_threshold = float(config_args.lossy_threshold)
+        if config_args.lossy_window_size is not None:
+            config.draft_params.lossy_window_size = int(config_args.lossy_window_size)
     
     # 6. Build pipeline
     # We must patch sys.argv for Typer to work correctly on the subcommands
