@@ -6,9 +6,6 @@ import numpy as np
 import torch
 import gc
 import logging
-
-from smolagents import CodeAgent, ToolCallingAgent
-from specdecodes.helpers.wrappers import SpecDecodesModel
 from specdecodes.models.utils.wandb_logger import wandb_logger
 
 def run_common_eval(generator, tokenizer, past_key_values, draft_past_key_values, args, dataset, log_dir):
@@ -33,24 +30,28 @@ def run_common_eval(generator, tokenizer, past_key_values, draft_past_key_values
     generator.profiling = is_profiling
     
     # Evaluate dataset
-    log_file = os.path.join(log_dir, f"0.jsonl")
-    if os.environ.get("DETAILED_ANALYSIS", "False") == "True":
-        detailed_log_file = os.path.join(log_dir, f"detailed_analysis.jsonl")
+    log_file = os.path.join(log_dir, "0.jsonl")
     tput_list, tacc_list, draft_time_list, target_time_list = [], [], [], []
     post_verify_count_list, speculate_count_list = [], []
     for idx, query in tqdm(enumerate(dataset), total=len(dataset), desc="Evaluating", leave=True):
         messages = [{"role": "user", "content": query}]
         tokenizer.use_default_system_prompt = True
         input_ids = tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=True, return_tensors="pt").to(generator.device)
-        # logging.info(f"Check shape {input_ids.shape[1]}")
         
         if input_ids.shape[1] > args.max_length:
             logging.info(f"Skipping query No.{idx} due to length {input_ids.shape[1]} > {args.max_length}")
             continue
         
         with sdpa_kernel(backends=[SDPBackend.MATH]):
-            output_ids = generator.generate(input_ids, temperature=args.temperature, max_length=args.max_length, do_sample=args.do_sample, past_key_values=past_key_values, draft_past_key_values=draft_past_key_values)
-            
+            output_ids = generator.generate(
+                input_ids,
+                temperature=args.temperature,
+                max_length=args.max_length,
+                do_sample=args.do_sample,
+                past_key_values=past_key_values,
+                draft_past_key_values=draft_past_key_values,
+            )
+
         past_key_values.reset()
         if draft_past_key_values is not None:
             draft_past_key_values.reset()
@@ -60,12 +61,6 @@ def run_common_eval(generator, tokenizer, past_key_values, draft_past_key_values
         with open(log_file, 'a+') as f:
             json.dump(exp_log, f, indent=4)
             f.write("\n")
-        if os.environ.get("DETAILED_ANALYSIS", "False") == "True":
-            detailed_data = getattr(generator, 'detaild_data', None)
-            with open(detailed_log_file, 'a+') as f:
-                # json.dump({"idx": idx, "detailed_data": detailed_data}, f, indent=4)
-                json.dump(detailed_data, f)
-                f.write("\n")
 
         if exp_log.get("tput", None) is not None:
             tput_list.append(exp_log.get("tput", 0))
@@ -79,7 +74,7 @@ def run_common_eval(generator, tokenizer, past_key_values, draft_past_key_values
             speculate_count_list.append(exp_log.get("speculate_count", 0))
         if exp_log.get("post_verify_count", None) is not None:
             post_verify_count_list.append(exp_log.get("post_verify_count", 0))
-            
+
         del input_ids, output_ids
         gc.collect()
         torch.cuda.empty_cache()
@@ -132,7 +127,7 @@ def run_mtbench_eval(generator, tokenizer, past_key_values, draft_past_key_value
     generator.profiling = is_profiling
 
     # Evaluate dataset
-    log_file = os.path.join(log_dir, f"0.jsonl")
+    log_file = os.path.join(log_dir, "0.jsonl")
     tput_list, tacc_list, draft_time_list, target_time_list = [], [], [], []
     post_verify_count_list, speculate_count_list = [], []
     for idx, turns in tqdm(enumerate(dataset), total=len(dataset), desc="Evaluating", leave=True):
@@ -152,11 +147,9 @@ def run_mtbench_eval(generator, tokenizer, past_key_values, draft_past_key_value
         }
         messages = []
         for tid, query in enumerate(turns):
-            # print(f"Turn {tid+1}/{len(turns)} -> {query}"
             messages.append({"role": "user", "content": query})
             tokenizer.use_default_system_prompt = True
             input_ids = tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=True, return_tensors="pt").cuda(device=args.device)
-            # logging.info(f"Check shape {input_ids.shape[1]}")
                     
             if input_ids.shape[1] > args.max_length:
                 logging.info(f"Skipping query No.{idx} (turn {tid}) due to length {input_ids.shape[1]} > {args.max_length}")
@@ -192,8 +185,6 @@ def run_mtbench_eval(generator, tokenizer, past_key_values, draft_past_key_value
             exp_log = {**exp_log, tid: {**wandb_logger.log_data, "query": query, "response": output_message, "peak_memory": torch.cuda.max_memory_reserved(args.device)/(1024**3)}}
             messages.append({"role": "system", "content": output_message})
             
-            # (Counters are logged via wandb_logger by SDProfilingMixin when available.)
-            
             del input_ids, output_ids
             gc.collect()
             torch.cuda.empty_cache()
@@ -202,7 +193,6 @@ def run_mtbench_eval(generator, tokenizer, past_key_values, draft_past_key_value
         if draft_past_key_values is not None:
             draft_past_key_values.reset()
         
-        # output_message = tokenizer.decode(output_ids[0][input_ids.shape[1]:])
         overall_log = {
             "avg_draft_time": tmp_exp_log['total_draft_time'] / tmp_exp_log['n_iter'] if tmp_exp_log['n_iter'] > 0 else 0,
             "avg_target_time": tmp_exp_log['total_target_time'] / tmp_exp_log['n_iter'] if tmp_exp_log['n_iter'] > 0 else 0,
@@ -262,8 +252,6 @@ def run_mtbench_eval(generator, tokenizer, past_key_values, draft_past_key_value
     print(f"\tPeak Memory: {peak_memory:.3f} GiB")
     if hasattr(generator, 'post_verify_count') and generator.post_verify_count is not None:
         print(f"\tPost-Verify Rate: {post_verify_rate:.3f}")
-    
-    # return tput_mean, tput_std, tacc_mean, tacc_std, avg_draft_time, avg_target_time, peak_memory
     return {
         "tput_mean": float(tput_mean),
         "tput_std": float(tput_std),
