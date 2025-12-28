@@ -11,6 +11,7 @@ This repository is the official implementation of *"Speculate Deep and Accurate:
 	- [YAML configs (recommended)](#yaml-configs-recommended)
 	- [Available Methods](#available-methods)
 	- [Common Arguments](#common-arguments)
+- [Testing](#testing)
 - [Evaluation](#evaluation)
 	- [Examples](#examples)
 - [Results](#results)
@@ -100,6 +101,20 @@ The following methods are available (registered in `run/core/presets.py`):
 - `--device`: Target device (e.g., `cuda:0`, `cuda:1`). Defaults to `cuda:0`.
 - `--warmup-iter`: Number of warmup iterations. Default varies by method (typically 1).
 - `--compile-mode`: Torch compile mode (e.g., `reduce-overhead`, `max-autotune`, or `none`). Defaults to `none`.
+
+## Testing
+
+Run the unit tests with:
+
+```bash
+pytest -q
+```
+
+Some tests that run real model workloads are skipped by default. To enable them:
+
+```bash
+SUBSPEC_RUN_REAL_MODEL_TESTS=1 pytest -q
+```
 
 ## Evaluation
 
