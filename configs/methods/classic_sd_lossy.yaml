@@ -1,0 +1,25 @@
+# Classic tree-SD with lossy verification
+method: classic_sd
+
+llm_path: meta-llama/Llama-3.1-8B-Instruct
+draft_model_path: meta-llama/Llama-3.2-1B-Instruct
+
+recipe: null
+
+max_length: 2048
+cache_implementation: static
+warmup_iter: 1
+compile_mode: max-autotune
+
+generator_profiling: true
+
+generator_kwargs:
+  prefill_chunk_size: 4096
+  lossy_verify: true
+
+draft_params:
+  temperature: 1.0
+  max_depth: 8
+  topk_len: 16
+  lossy_threshold: 0.3
+  lossy_window_size: 6

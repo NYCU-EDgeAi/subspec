@@ -1,0 +1,25 @@
+# SubSpec SD (v1) + lossy verification
+method: subspec_sd
+
+llm_path: meta-llama/Llama-3.2-1B-Instruct
+
+recipe:
+  class_path: specdecodes.helpers.recipes.subspec.hqq_4bit_attn_4bit_mlp:Recipe
+
+max_length: 2048
+cache_implementation: static
+warmup_iter: 1
+compile_mode: max-autotune
+
+generator_profiling: true
+
+generator_kwargs:
+  prefill_chunk_size: 4096
+  lossy_verify: true
+
+draft_params:
+  temperature: 0.2
+  max_depth: 32
+  topk_len: 6
+  lossy_threshold: 0.3
+  lossy_window_size: 6

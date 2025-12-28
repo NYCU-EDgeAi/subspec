@@ -1,0 +1,27 @@
+method: eagle_sd
+vram_limit_gb: 8
+seed: 0
+device: cuda:0
+max_length: 2048
+
+llm_path: meta-llama/Llama-3.1-8B-Instruct
+draft_model_path: ~/checkpoints/eagle/official/EAGLE-Llama-3.1-8B-Instruct
+
+do_sample: false
+temperature: 0
+
+generator_kwargs: {}
+
+draft_params:
+  temperature: 1
+  max_depth: 6
+  topk_len: 10
+
+recipe:
+  class_path: specdecodes.helpers.recipes.offload.layer_offload:LayerOffloadRecipe
+  kwargs:
+    keep_first_n_layers_on_gpu: 7
+
+cache_implementation: static
+warmup_iter: 3
+compile_mode: max-autotune

@@ -1,0 +1,16 @@
+# Naive generation (no draft model)
+method: vanilla
+
+llm_path: meta-llama/Llama-3.1-8B-Instruct
+
+recipe: null
+
+max_length: 4096
+cache_implementation: static
+warmup_iter: 1
+compile_mode: max-autotune
+
+generator_profiling: true
+
+generator_kwargs:
+  prefill_chunk_size: 4096

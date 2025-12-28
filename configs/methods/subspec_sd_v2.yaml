@@ -1,0 +1,22 @@
+# SubSpec SD (v2) example
+method: subspec_sd_v2
+
+llm_path: meta-llama/Llama-3.1-8B-Instruct
+
+recipe:
+  class_path: specdecodes.helpers.recipes.subspec.hqq_4bit_attn_4bit_mlp_postspec:Recipe
+
+max_length: 10240
+cache_implementation: static
+warmup_iter: 3
+compile_mode: max-autotune
+
+generator_profiling: true
+
+generator_kwargs:
+  prefill_chunk_size: 4096
+
+draft_params:
+  temperature: 0.2
+  max_depth: 16
+  topk_len: 6

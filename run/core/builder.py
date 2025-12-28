@@ -1,7 +1,7 @@
 import logging
 import os
 import random
-from typing import Any, Dict, Tuple, Optional
+from typing import Any, Dict, Tuple, Optional, TYPE_CHECKING
 from types import SimpleNamespace
 
 import torch
@@ -10,8 +10,10 @@ from specdecodes.models.utils.cache_utils import create_kv_cache
 from specdecodes.models.generators.naive import NaiveGenerator
 from .router import run_app
 from .registry import ModelRegistry
+from .config_utils import instantiate_recipe
 # Type hint only, import inside init to avoid circular dependency from .registry import ModelRegistry
-# from .configuration import AppConfig 
+if TYPE_CHECKING:
+    from .configuration import AppConfig
 
 
 LOGLEVEL = os.environ.get("LOGLEVEL", "INFO").upper()
@@ -28,7 +30,7 @@ class GeneratorPipelineBuilder:
       - Applying quantization and offloading through the recipe (if applicable)
       - Building and optionally compiling the generator pipeline
     """
-    def __init__(self, config: Optional['AppConfig'] = None):
+    def __init__(self, config: Optional["AppConfig"] = None):
         if config is None:
             # Fallback for backward compatibility or default init
             from .configuration import AppConfig
@@ -39,6 +41,11 @@ class GeneratorPipelineBuilder:
         # Expose config attributes as self attributes for backward compatibility
         # (This is a temporary measure, ideally we should update all usages to access self.config)
         self.__dict__.update(config.__dict__)
+
+        # Normalize recipe from YAML/preset into an actual recipe object.
+        # (Some entrypoints may construct AppConfig directly without going through run/main.py.)
+        self.recipe = instantiate_recipe(getattr(self, "recipe", None))
+        self.config.recipe = self.recipe
         
     @property
     def args(self) -> Dict[str, Any]:
@@ -55,14 +62,28 @@ class GeneratorPipelineBuilder:
         """
         torch.manual_seed(self.seed)
         random.seed(self.seed)
-        torch.cuda.set_device(self.device)
-        torch.cuda.manual_seed_all(self.seed)
-        
-        # Set memory limit.
-        total_memory = torch.cuda.get_device_properties(self.device).total_memory
-        if self.vram_limit_gb is not None:
-            memory_fraction = min(1.0, float(self.vram_limit_gb * (1024**3))/total_memory)
-            torch.cuda.set_per_process_memory_fraction(memory_fraction, self.device)
+
+        # Configure CUDA only when a CUDA device is requested and available.
+        cuda_device: Optional[torch.device] = None
+        if torch.cuda.is_available():
+            if isinstance(self.device, torch.device):
+                cuda_device = self.device if self.device.type == "cuda" else None
+            elif isinstance(self.device, int):
+                cuda_device = torch.device(f"cuda:{self.device}")
+            elif isinstance(self.device, str) and self.device.startswith("cuda"):
+                cuda_device = torch.device(self.device)
+
+        if cuda_device is not None:
+            torch.cuda.set_device(cuda_device)
+            torch.cuda.manual_seed_all(self.seed)
+
+            torch.set_float32_matmul_precision("high")
+
+            # Set memory limit.
+            total_memory = torch.cuda.get_device_properties(cuda_device).total_memory
+            if self.vram_limit_gb is not None:
+                memory_fraction = min(1.0, float(self.vram_limit_gb * (1024**3)) / total_memory)
+                torch.cuda.set_per_process_memory_fraction(memory_fraction, cuda_device)
 
     def load_model_and_tokenizer(self, model_path: str):
         """
@@ -206,8 +227,9 @@ class GeneratorPipelineBuilder:
         if has_offloader:
             logging.info("Skipping torch.compile() for target_model because recipe.offloader is set.")
         else:
-            generator.draft_model.forward = torch.compile(generator.draft_model.forward, mode=self.compile_mode, dynamic=False, fullgraph=True)
+            generator.target_model.forward = torch.compile(generator.target_model.forward, mode=self.compile_mode, dynamic=False, fullgraph=True)
 
+        # Compile draft model if it exists
         if getattr(generator, 'draft_model', None) is not None:
             generator.draft_model.forward = torch.compile(generator.draft_model.forward, mode=self.compile_mode, dynamic=False, fullgraph=True)
     
