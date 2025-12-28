@@ -109,9 +109,10 @@ class GeneratorPipelineBuilder:
         if entry and entry.load_draft_model_fn:
             return entry.load_draft_model_fn(self, target_model, tokenizer, draft_model_path)
             
-        if entry and entry.draft_model_cls:
+        draft_model_cls = entry.get_draft_model_cls() if entry else None
+        if draft_model_cls:
             # Assuming standard from_pretrained pattern
-            draft_model = entry.draft_model_cls.from_pretrained(
+            draft_model = draft_model_cls.from_pretrained(
                 draft_model_path,
                 target_model=target_model,
                 torch_dtype=self.dtype,
@@ -184,8 +185,9 @@ class GeneratorPipelineBuilder:
         Initialize the generator with the target model, tokenizer, and draft model.
         """
         entry = ModelRegistry.get(self.config.method)
-        if entry and entry.generator_cls:
-            generator = entry.generator_cls(
+        generator_cls = entry.get_generator_cls() if entry else None
+        if generator_cls:
+            generator = generator_cls(
                 target_model=target_model,
                 tokenizer=tokenizer,
                 draft_model=draft_model,
