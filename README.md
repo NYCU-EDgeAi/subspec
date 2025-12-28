@@ -4,6 +4,21 @@ This repository is the official implementation of *"Speculate Deep and Accurate:
 
 ![fig1](./assets/fig1.png)
 
+## Table of Contents
+
+- [Requirements](#requirements)
+- [Usage](#usage)
+	- [YAML configs (recommended)](#yaml-configs-recommended)
+	- [Available Methods](#available-methods)
+	- [Common Arguments](#common-arguments)
+- [Evaluation](#evaluation)
+	- [Examples](#examples)
+- [Results](#results)
+- [OpenAI-Compatible API Server](#openai-compatible-api-server)
+	- [Run the server](#run-the-server)
+	- [Example: eagle_sd](#example-eagle_sd)
+	- [Quick API checks](#quick-api-checks)
+
 ## Requirements
 
 First, create and activate a conda environment with the following command:
@@ -17,7 +32,7 @@ Then, install [PyTorch](https://pytorch.org/get-started/locally/) from the offic
 
 Install the rest of the base requirements:
 
-```setup
+```bash
 pip install "smolagents[toolkit]"
 pip install -r requirements.txt
 ```
@@ -37,18 +52,38 @@ pip install flute-kernel
 git clone https://github.com/Dao-AILab/fast-hadamard-transform.git
 cd fast-hadamard-transform
 pip install -e .
+cd ..
 ```
 
-## Evaluation
+## Usage
 
-To evaluate the performance of SubSpec and other methods, use the unified entry point `run.main`:
+All entrypoints go through `run.main`. You can either select a preset by name (`--method`) or run from a YAML config (`--config`).
+
+### YAML configs (recommended)
+
+- Method templates: `configs/methods/`
+- Migrated offloading experiment configs: `configs/exp_offloading/`
+
+Precedence: method defaults < YAML < CLI.
 
 ```bash
-# Basic usage
-python -m run.main --method <method_name> run-test
+# Run from a method YAML
+python -m run.main --config configs/methods/classic_sd.yaml run-test
 
-# Running detailed benchmarks
-python -m run.main --method <method_name> run-benchmark --benchmarks <benchmarks> --max-samples 20
+# Run from an exp_offloading YAML (includes a recipe + per-model offload settings)
+python -m run.main --config configs/exp_offloading/vanilla_qwen_7b.yaml run-test
+
+# Override YAML values from the CLI
+python -m run.main --config configs/methods/classic_sd.yaml --device cuda:1 --warmup-iter 0 run-test
+```
+
+Offloading YAML configs parameterize “how many layers remain on GPU” via:
+
+```yaml
+recipe:
+  class_path: specdecodes.helpers.recipes.offload.layer_offload:LayerOffloadRecipe
+  kwargs:
+    keep_first_n_layers_on_gpu: <N>
 ```
 
 ### Available Methods
@@ -61,9 +96,20 @@ The following methods are available (registered in `run/core/presets.py`):
 
 ### Common Arguments
 - `--method`: The decoding method to use (required for defaults).
+- `--config`: Path to a YAML config (recommended). CLI args override YAML.
 - `--device`: Target device (e.g., `cuda:0`, `cuda:1`). Defaults to `cuda:0`.
 - `--warmup-iter`: Number of warmup iterations. Default varies by method (typically 1).
-- `--compile-mode`: Torch compile mode (e.g., `reduce-overhead`, `max-autotune`, or `none`). Defaults to `none` (or method-specific default).
+- `--compile-mode`: Torch compile mode (e.g., `reduce-overhead`, `max-autotune`, or `none`). Defaults to `none`.
+
+## Evaluation
+
+```bash
+# Quick sanity check
+python -m run.main --method <method_name> run-test
+
+# Detailed benchmark run
+python -m run.main --method <method_name> run-benchmark --benchmarks <benchmarks> --max-samples 20
+```
 
 ### Examples
 
@@ -77,7 +123,7 @@ python -m run.main --method subspec_sd --device "cuda:0" run-benchmark --benchma
 python -m run.main --method classic_sd --device "cuda:1" --warmup-iter 0 run-test
 ```
 
-**9. Selectable Benchmarks:**
+**Selectable benchmarks:**
 "mt-bench", "human-eval", "gsm8k", "alpaca", "cnn-dm", "aime", "gpqa", "math-500", and "livecodebench".
 
 > The datasets and pretrained models will be downloaded automatically from Hugging Face.

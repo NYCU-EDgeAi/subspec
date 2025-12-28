@@ -7,6 +7,7 @@ import nvtx
 from .base import GeneratorBase
 from ..utils.mixin import SDProfilingMixin
 from ..utils.utils import DraftParams, invert_mask
+from ..utils.tree_verify import verify_tree
 from ..utils.flashinfer.cache_manager import (
     KvCachePool,
     KvCacheBatchPosition,
@@ -136,78 +137,24 @@ class ClassicSDGeneratorBase(GeneratorBase):
             return None, sampled_token_id
         
     def _verify(self, tree, root_ind ,logits, logits_processor, do_sample,skip_nodes=0):
-        # Obtain LLM sample logits
-        # global_p = sample_token_method(logits, return_probs=True).squeeze(0).to(device='cpu') # remove batch dim
-        global_p = self._sample_token(logits, logits_processor, do_sample, return_probs=True)
-        global_p = global_p.squeeze(0).cpu()
-        
-        # Initialize variables
-        sampled_tokens = torch.empty(0, dtype=torch.long, device='cpu')
-        hidden_indices = torch.empty(0, dtype=torch.long, device='cpu')
-        total_len = accept_len = 0
-        # bonus_token = None
-        
-        # Iterate through draft tree, verify each node
-        node_data = tree.get_tree_data(skip_nodes=skip_nodes)
-        token_ids = node_data['token_ids']  # (num_nodes,)
-        cur_ind = torch.tensor([root_ind], dtype=torch.long, device='cpu') # start at root
-        children_inds = tree.get_children_indices(cur_ind)
-        children_token_ids = token_ids[children_inds-skip_nodes]
-        
-        if(children_inds.numel() == 0):
-            bonus_token = None
-            
-        torch.cuda.synchronize() # synchronize before starting the loop
-        while children_inds.numel() > 0:
-            total_len += 1
-            dist = global_p[cur_ind-skip_nodes].squeeze(0)  # (vocab_size,)
-            accept_token_id, bonus_token = self._verify_step(dist, children_token_ids, logits_processor, do_sample)
-            
-            # if accept_token_id is not None, it means the token is in the children
-            # -> accept token, update cur_ind and children_inds
-            # if accept_token_id is None, it means the token is not in the children
-            # -> reject token, update global_p and break
-            if accept_token_id is not None:
-                accept_len += 1
-                sampled_tokens = torch.cat([sampled_tokens, accept_token_id[None]])
-                hidden_indices = torch.cat([hidden_indices, cur_ind])
-                
-                # Stop on EOS
-                if accept_token_id == self.draft_model.eos_token_id:
-                    break
+        lossy_enabled = bool(getattr(self, "generator_kwargs", {}).get("lossy_verify", False))
+        lossy_threshold = float(getattr(self.draft_params, "lossy_threshold", 0.0))
+        lossy_window_size = int(getattr(self.draft_params, "lossy_window_size", 1))
 
-                # Update
-                cur_ind = children_inds[children_token_ids == accept_token_id]
-                children_inds = tree.get_children_indices(cur_ind)
-                children_token_ids = token_ids[children_inds-skip_nodes]
-                # Stop if current index exceeds global_p shape
-                if (children_inds-skip_nodes).numel() == 0 :
-                    # logging.warning("No more children nodes to verify.")
-                    break
-                if (torch.min(children_inds-skip_nodes)).item() >= global_p.shape[0]:
-                    # logging.warning(f"Current index {cur_ind-skip_nodes} exceeds global_p shape {global_p.shape[0]}.")
-                    break
-            
-            # Reject token, break
-            else:
-                break
-        
-        # Generate bonus token, don't generate if eos token is the last token
-        if sampled_tokens.numel() == 0 or sampled_tokens[-1] != self.draft_model.eos_token_id:
-            if bonus_token is None:
-                # print(f"Bonus token is None")
-                dist = global_p[cur_ind-skip_nodes].squeeze(0)
-                if do_sample:
-                    bonus_token = dist.multinomial(num_samples=1).squeeze(-1)
-                else:
-                    bonus_token = dist.argmax()
-            
-            if bonus_token is not None:
-                # print(f"Bonus token is not None")
-                sampled_tokens = torch.cat([sampled_tokens, bonus_token.unsqueeze(0)])
-                hidden_indices = torch.cat([hidden_indices, cur_ind])
-        
-        return sampled_tokens.unsqueeze(0), hidden_indices, (total_len, accept_len)
+        return verify_tree(
+            tree=tree,
+            root_ind=int(root_ind),
+            logits=logits,
+            sample_token_fn=self._sample_token,
+            verify_step_fn=self._verify_step,
+            eos_token_id=getattr(self.draft_model, "eos_token_id", None),
+            logits_processor=logits_processor,
+            do_sample=do_sample,
+            skip_nodes=int(skip_nodes),
+            lossy=lossy_enabled,
+            lossy_threshold=lossy_threshold,
+            lossy_window_size=lossy_window_size,
+        )
 
 
     def _generate(

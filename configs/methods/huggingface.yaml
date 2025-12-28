@@ -1,0 +1,15 @@
+# HuggingFace baseline generation (no draft model)
+method: huggingface
+
+llm_path: meta-llama/Llama-3.1-8B-Instruct
+
+recipe: null
+
+max_length: 2048
+cache_implementation: dynamic
+warmup_iter: 0
+compile_mode: null
+
+generator_profiling: true
+
+generator_kwargs: {}

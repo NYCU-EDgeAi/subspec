@@ -1,0 +1,21 @@
+method: vanilla
+vram_limit_gb: 8
+device: cuda:0
+max_length: 2048
+
+llm_path: meta-llama/Llama-3.1-8B-Instruct
+
+do_sample: false
+temperature: 0
+
+generator_kwargs:
+  prefill_chunk_size: 256
+
+recipe:
+  class_path: specdecodes.helpers.recipes.offload.layer_offload:LayerOffloadRecipe
+  kwargs:
+    keep_first_n_layers_on_gpu: 11
+
+cache_implementation: static
+warmup_iter: 1
+compile_mode: null
