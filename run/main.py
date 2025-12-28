@@ -1,6 +1,7 @@
 import sys
 import argparse
 import os
+import shutil
 from dataclasses import asdict, is_dataclass
 from typing import Any, Dict
 
@@ -117,7 +118,72 @@ def _build_base_parser() -> argparse.ArgumentParser:
         required=True,
         help="Path to a YAML config file. Required. Values override method defaults; CLI args override YAML.",
     )
+
+    # Research toggles (parsed early so we can optionally re-exec under Nsight Systems).
+    parser.add_argument(
+        "--nvtx-profiling",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable/disable NVTX profiling via nsys re-exec (overrides YAML)",
+    )
+    parser.add_argument(
+        "--nsys-output",
+        type=str,
+        default=None,
+        help="Nsight Systems output base name (overrides YAML)",
+    )
+    parser.add_argument(
+        "--detailed-analysis",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable/disable detailed analysis logging (overrides YAML)",
+    )
     return parser
+
+
+def _maybe_reexec_with_nsys(enabled: bool, output: str) -> None:
+    if not enabled:
+        return
+
+    # Avoid infinite recursion when we re-exec under nsys.
+    if os.environ.get("SUBSPEC_NSYS_ACTIVE", "0") == "1":
+        return
+
+    if shutil.which("nsys") is None:
+        print("Error: NVTX profiling requested but `nsys` was not found in PATH.")
+        sys.exit(1)
+
+    os.environ["SUBSPEC_NSYS_ACTIVE"] = "1"
+
+    # Mirrors the previous wrapper-script settings, but lives in Python so it's config-driven.
+    cmd = [
+        "nsys",
+        "profile",
+        "-w",
+        "true",
+        "-t",
+        "cuda,nvtx,osrt,cudnn,cublas",
+        "-s",
+        "cpu",
+        "--capture-range=cudaProfilerApi",
+        "--capture-range-end=stop-shutdown",
+        "--cudabacktrace=all",
+        "--force-overwrite=true",
+        "--python-sampling-frequency=1000",
+        "--python-sampling=true",
+        "--cuda-memory-usage=true",
+        "--gpuctxsw=true",
+        "--python-backtrace",
+        "-x",
+        "true",
+        "-o",
+        output,
+        sys.executable,
+        "-m",
+        "run.main",
+        *sys.argv[1:],
+    ]
+    os.execvp(cmd[0], cmd)
 
 
 def _build_full_parser(base_parser: argparse.ArgumentParser, default_config: Dict[str, Any]) -> argparse.ArgumentParser:
@@ -217,6 +283,14 @@ def _apply_cli_overrides(config: AppConfig, config_args: argparse.Namespace) -> 
     config.cache_implementation = config_args.cache_implementation
     config.generator_profiling = bool(config_args.generator_profiling)
 
+    # Optional research toggles: only override when explicitly provided.
+    if getattr(config_args, "detailed_analysis", None) is not None:
+        config.detailed_analysis = bool(config_args.detailed_analysis)
+    if getattr(config_args, "nvtx_profiling", None) is not None:
+        config.nvtx_profiling = bool(config_args.nvtx_profiling)
+    if getattr(config_args, "nsys_output", None) is not None:
+        config.nsys_output = str(config_args.nsys_output)
+
 
 def _apply_generator_kwargs_overrides(config: AppConfig, config_args: argparse.Namespace) -> None:
     if config.generator_kwargs is None:
@@ -248,10 +322,7 @@ def main():
     # Important: set before the first CUDA context initialization.
     os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":16:8")
 
-    # 1. Register presets
-    register_presets()
-
-    # 2. Parse method + YAML config path first to load defaults
+    # 1. Parse method + YAML config path first to load defaults
     base_parser = _build_base_parser()
     args, _ = base_parser.parse_known_args()
 
@@ -268,6 +339,14 @@ def main():
     except ValueError as e:
         print(f"Error: {e}")
         sys.exit(2)
+
+    # If enabled via YAML/CLI, re-exec under Nsight Systems *before* importing heavy GPU code.
+    effective_nvtx = bool(args.nvtx_profiling) if args.nvtx_profiling is not None else bool(yaml_config.get("nvtx_profiling", False))
+    effective_nsys_output = str(args.nsys_output) if args.nsys_output is not None else str(yaml_config.get("nsys_output", "nsight_report"))
+    _maybe_reexec_with_nsys(effective_nvtx, effective_nsys_output)
+
+    # 2. Register presets (after optional nsys re-exec)
+    register_presets()
     
     # 3. Get default config for the method
     method_entry = ModelRegistry.get(args.method)
@@ -302,6 +381,18 @@ def main():
     _apply_cli_overrides(config, config_args)
     _apply_generator_kwargs_overrides(config, config_args)
     _apply_draft_params_overrides(config, config_args)
+
+    # Propagate global research flags via wandb_logger (avoids env var plumbing).
+    try:
+        from specdecodes.models.utils.wandb_logger import wandb_logger
+
+        wandb_logger.set_flags(
+            detailed_analysis=bool(getattr(config, "detailed_analysis", False)),
+            nvtx_profiling=bool(getattr(config, "nvtx_profiling", False)),
+        )
+    except Exception:
+        # Keep main robust even if wandb_logger isn't importable in some minimal setups.
+        pass
 
     # Allow YAML to specify recipes via import path + kwargs.
     config.recipe = instantiate_recipe(getattr(config, "recipe", None))

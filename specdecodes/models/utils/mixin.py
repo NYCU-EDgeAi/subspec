@@ -122,23 +122,9 @@ class SDProfilingMixin:
         
         self.verify_events.append((start_event, end_event))
         
-        if os.environ.get("DETAILED_ANALYSIS", "False") == "True":
+        if wandb_logger.get_flag("detailed_analysis", False):
             draft_prob = getattr(self.draft_model, 'draft_prob', None)
             self.detaild_data.append([draft_prob, accept_len])
-            # print(f"draft_prob: \n{draft_prob}")
-            # print(f"acc_len: {accept_len}")
-
-        # tokenize id to text for visualization
-        # nodes = list(preorder_iter(root))
-        # for node in nodes:
-        #     node.id = self.tokenizer.decode(torch.tensor([node.id]), clean_up_tokenization_spaces=False)
-        
-        # profile data
-        # json_graph = tree_to_nested_dict(root, name_key="name", attr_dict={"id": "id", "prob": "prob", "global_prob": "global_prob"})
-        # sampled_tokens_list = sampled_tokens.squeeze(0).tolist()
-        # self.profile_data[self.iter_count] = {}
-        # self.profile_data[self.iter_count]["draft_tree"] = json_graph
-        # self.profile_data[self.iter_count]["sampled_tokens"] = sampled_tokens_list
         
         # create profile data if not exist
         self.profile_data['iter'] = self.profile_data.get('iter', [])
@@ -208,9 +194,9 @@ class SDProfilingMixin:
         self.profile_data = {}
         self.sampled_count = 1 # assume first token is sampled (prefill stage)
         self.iter_count = 1 # assume first step is done (prefill stage)
-        if os.environ.get("DETAILED_ANALYSIS", "False") == "True":
+        if wandb_logger.get_flag("detailed_analysis", False):
             self.detaild_data = []
-        wandb_logger.log_data.clear()
+        wandb_logger.clear_log_data()
 
         self.draft_events = []
         self.target_events = []
@@ -271,7 +257,7 @@ class SDProfilingMixin:
         # log stats
         if self.profiling_verbose:
             tb = pt.PrettyTable()
-            tb.field_names = [ "Summary \ Depth" ] + [ f"{i}" for i in range(1, depth) ]
+            tb.field_names = [ "Summary \\ Depth" ] + [ f"{i}" for i in range(1, depth) ]
             tb.add_row([ "Trials count" ] + [ f"{val}" for val in depth_total_cnt.tolist() ])
             tb.add_row([ "Accept count" ] + [ f"{val}" for val in depth_accept_cnt.tolist() ])
             tb.add_row([ "Alpha (node)" ] + [ f"{val:.2f}" for val in alpha_per_node.tolist() ])
@@ -317,6 +303,9 @@ class SDProfilingMixin:
 
             denom = post_verify_count + speculate_count
             wandb_logger.log_data['post_verify_rate'] = (float(post_verify_count) / float(denom)) if denom > 0 else 0.0
+
+        if wandb_logger.get_flag("detailed_analysis", False):
+            wandb_logger.log_data['detailed_analysis'] = getattr(self, 'detaild_data', [])
         
         if self.profiling_verbose:
             logging.info(

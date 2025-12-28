@@ -1,7 +1,7 @@
 import logging
 import os
 import random
-from typing import Any, Dict, Tuple, Optional, TYPE_CHECKING
+from typing import Any, Optional, TYPE_CHECKING
 from types import SimpleNamespace
 
 import torch
@@ -32,14 +32,12 @@ class GeneratorPipelineBuilder:
     """
     def __init__(self, config: Optional["AppConfig"] = None):
         if config is None:
-            # Fallback for backward compatibility or default init
             from .configuration import AppConfig
             config = AppConfig()
         
         self.config = config
-        
-        # Expose config attributes as self attributes for backward compatibility
-        # (This is a temporary measure, ideally we should update all usages to access self.config)
+
+        # Expose config attributes directly for legacy call sites.
         self.__dict__.update(config.__dict__)
 
         # Normalize recipe from YAML/preset into an actual recipe object.
@@ -48,10 +46,7 @@ class GeneratorPipelineBuilder:
         self.config.recipe = self.recipe
         
     @property
-    def args(self) -> Dict[str, Any]:
-        """
-        Return all attributes of the class as a dictionary.
-        """
+    def args(self) -> SimpleNamespace:
         my_dict = {k: v for k, v in self.__dict__.items() if not k.startswith("_") and not callable(v)}
         return SimpleNamespace(**my_dict)
         

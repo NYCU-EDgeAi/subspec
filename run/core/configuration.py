@@ -44,6 +44,11 @@ class AppConfig:
     out_dir: Optional[str] = None
     log_dir: str = "experiments"
 
+    # Research toggles (set via YAML/CLI)
+    detailed_analysis: bool = False
+    nvtx_profiling: bool = False
+    nsys_output: str = "nsight_report"
+
     def update(self, new_config: Dict[str, Any]):
         for key, value in new_config.items():
             if hasattr(self, key):

@@ -9,6 +9,8 @@ This repository is the official implementation of *"Speculate Deep and Accurate:
 - [Requirements](#requirements)
 - [Usage](#usage)
 	- [YAML configs (recommended)](#yaml-configs-recommended)
+	- [Profiling (Nsight Systems + NVTX)](#profiling-nsight-systems--nvtx)
+	- [Detailed analysis](#detailed-analysis)
 	- [Available Methods](#available-methods)
 	- [Common Arguments](#common-arguments)
 - [Evaluation](#evaluation)
@@ -93,6 +95,38 @@ recipe:
   class_path: specdecodes.helpers.recipes.offload.layer_offload:LayerOffloadRecipe
   kwargs:
     keep_first_n_layers_on_gpu: <N>
+```
+
+### Profiling (Nsight Systems + NVTX)
+
+This repo already contains NVTX ranges in the code. To capture them with Nsight Systems, enable profiling via YAML (or CLI):
+
+```yaml
+nvtx_profiling: true
+nsys_output: nsight_report
+```
+
+Then run as usual:
+
+```bash
+python -m run.main --config configs/methods/<method_name>.yaml run-test
+```
+
+You can also override via CLI:
+
+```bash
+python -m run.main --config configs/methods/<method_name>.yaml --nvtx-profiling --nsys-output my_report run-test
+```
+
+### Detailed analysis
+
+The old `DETAILED_ANALYSIS` env var is replaced with a config-driven flag:
+
+```yaml
+detailed_analysis: true
+```
+
+When enabled, extra per-step diagnostic data is stored in the JSONL output via `wandb_logger.log_data["detailed_analysis"]`.
 ```
 
 ### Available Methods

@@ -1,7 +1,8 @@
 import torch
 import torch.nn as nn
 import nvtx
-import os
+
+from specdecodes.models.utils.wandb_logger import wandb_logger
 
 from .base import DraftModelBase
 
@@ -74,7 +75,7 @@ class ClassicSDDraftModel(DraftModelBase):
             sampled_token = torch.argmax(sampled_probs[:, -1, :], dim=-1, keepdim=True)
             token_ids.append(sampled_token)
             
-        if os.environ.get("DETAILED_ANALYSIS", "False") == "True":
+        if wandb_logger.get_flag("detailed_analysis", False):
             self.draft_prob.append(torch.max(sampled_probs[:, -1, :]).cpu().item())
             
         # Update internal state

@@ -1,6 +1,7 @@
-import os
 import torch
 import nvtx
+
+from specdecodes.models.utils.wandb_logger import wandb_logger
 
 from ..utils.cpu_tree import Tree
 from .classic_sd import ClassicSDDraftModel, TreeData, TreeMaskCache
@@ -97,7 +98,7 @@ class SubSpecSDDraftModel(ClassicSDDraftModel):
             device=device,
         )
         
-        if os.environ.get("DETAILED_ANALYSIS", "False") == "True":
+        if wandb_logger.get_flag("detailed_analysis", False):
             self.draft_prob = [torch.max(sampled_probs[:, -1:]).cpu().item()]
 
         # 5) First update of tree_data and tree_mask_cache
