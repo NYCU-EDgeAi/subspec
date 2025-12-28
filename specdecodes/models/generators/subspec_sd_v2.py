@@ -218,8 +218,11 @@ class SubSpecSDGeneratorBase(ClassicSDGeneratorBase):
             self._maybe_stream(stream_callback, sampled_tokens)
 
         with nvtx.annotate("decoding"):
-            self.skip_spec_count = 0
-            self.regular_count = 0
+            # Better naming:
+            # - `post_verify_count`: previous speculative tree was fully accepted, so we run `post_verify` instead of re-speculating.
+            # - `speculate_count`: we had to run a fresh speculation step.
+            self.post_verify_count = 0
+            self.speculate_count = 0
 
             finished = False
             is_prev_accepted = False
@@ -230,7 +233,7 @@ class SubSpecSDGeneratorBase(ClassicSDGeneratorBase):
             while not finished:
                 # * speculate only if not previous accepted
                 if is_prev_accepted:
-                    self.skip_spec_count += 1
+                    self.post_verify_count += 1
                     # print("----- Post-speculation -----")
                     skip_nodes = last_tree_size
                     cache_position = torch.arange(position_offset+last_tree_size, position_offset+tree.size(), dtype=torch.long, device=input_ids.device)
@@ -249,7 +252,7 @@ class SubSpecSDGeneratorBase(ClassicSDGeneratorBase):
                     last_tree_depth = tree.get_depth()
 
                 else:
-                    self.regular_count += 1
+                    self.speculate_count += 1
                     # print("----- Regular speculation -----")
                     last_token_id = sampled_tokens[:, -1:].clone(memory_format=torch.contiguous_format)
                     with nvtx.annotate("speculate", color="cyan"):
@@ -321,7 +324,11 @@ class SubSpecSDGeneratorBase(ClassicSDGeneratorBase):
                         if finished:
                             past_key_values.seq_len -= prune_tokens
 
-        print("skip_spec_count:", self.skip_spec_count, "regular_count:", self.regular_count)      
+
+            # Normalize to plain ints for logging/consumers.
+            self.post_verify_count = int(self.post_verify_count)
+            self.speculate_count = int(self.speculate_count)
+
         return input_ids
     
 class SubSpecSDGenerator(SDProfilingMixin, SubSpecSDGeneratorBase):

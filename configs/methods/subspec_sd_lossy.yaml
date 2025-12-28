@@ -6,7 +6,7 @@ llm_path: meta-llama/Llama-3.2-1B-Instruct
 recipe:
   class_path: specdecodes.helpers.recipes.subspec.hqq_4bit_attn_4bit_mlp:Recipe
 
-max_length: 2048
+max_length: 4096
 cache_implementation: static
 warmup_iter: 1
 compile_mode: max-autotune

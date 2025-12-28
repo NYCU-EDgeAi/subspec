@@ -66,7 +66,7 @@ cd ..
 
 ## Usage
 
-All entrypoints go through `run.main`. You can either select a preset by name (`--method`) or run from a YAML config (`--config`).
+All entrypoints go through `run.main` by setting a YAML config (`--config`).
 
 ### YAML configs (recommended)
 
@@ -104,8 +104,8 @@ The following methods are available (registered in `run/core/presets.py`):
 - ...and others (`subspec_sd_v2`, `subspec_sd_no_offload`, etc.)
 
 ### Common Arguments
-- `--method`: The decoding method to use (required for defaults).
-- `--config`: Path to a YAML config (recommended). CLI args override YAML.
+- `--config`: Path to a YAML config (required). CLI args override YAML.
+- `--method`: Optional override for the YAML `method`.
 - `--device`: Target device (e.g., `cuda:0`, `cuda:1`). Defaults to `cuda:0`.
 - `--warmup-iter`: Number of warmup iterations. Default varies by method (typically 1).
 - `--compile-mode`: Torch compile mode (e.g., `reduce-overhead`, `max-autotune`, or `none`). Defaults to `none`.
@@ -114,22 +114,22 @@ The following methods are available (registered in `run/core/presets.py`):
 
 ```bash
 # Quick sanity check
-python -m run.main --method <method_name> run-test
+python -m run.main --config configs/methods/<method_name>.yaml run-test
 
 # Detailed benchmark run
-python -m run.main --method <method_name> run-benchmark --benchmarks <benchmarks> --max-samples 20
+python -m run.main --config configs/methods/<method_name>.yaml run-benchmark --benchmarks <benchmarks> --max-samples 20
 ```
 
 ### Examples
 
 **1. Evaluate SubSpec on MT-Bench with specific GPU:**
 ```bash
-python -m run.main --method subspec_sd --device "cuda:0" run-benchmark --benchmarks mt-bench --max-samples 20
+python -m run.main --config configs/methods/subspec_sd.yaml --device "cuda:0" run-benchmark --benchmarks mt-bench --max-samples 20
 ```
 
 **2. Run a quick test with Classic SD on a different GPU:**
 ```bash
-python -m run.main --method classic_sd --device "cuda:1" --warmup-iter 0 run-test
+python -m run.main --config configs/methods/classic_sd.yaml --device "cuda:1" --warmup-iter 0 run-test
 ```
 
 **Selectable benchmarks:**
@@ -161,14 +161,14 @@ Below is the result for accelerating Qwen2.5 7B with tree-based speculative deco
 Launch an interactive chat UI:
 
 ```bash
-python -m run.main --method <method_name> run-gradio --host 127.0.0.1 --port 7860
+python -m run.main --config configs/methods/<method_name>.yaml run-gradio --host 127.0.0.1 --port 7860
 ```
 
 To expose it on your network (or use a public share link):
 
 ```bash
-python -m run.main --method <method_name> run-gradio --host 0.0.0.0 --port 7860
-python -m run.main --method <method_name> run-gradio --share
+python -m run.main --config configs/methods/<method_name>.yaml run-gradio --host 0.0.0.0 --port 7860
+python -m run.main --config configs/methods/<method_name>.yaml run-gradio --share
 ```
 
 ### OpenAI-Compatible API Server
@@ -186,7 +186,7 @@ conda activate ~/envs/subspec
 2) Start the server via the unified entry point:
 
 ```bash
-python -m run.main --method <method_name> run-api --host 0.0.0.0 --port 8000
+python -m run.main --config configs/methods/<method_name>.yaml run-api --host 0.0.0.0 --port 8000
 ```
 
 #### Example: `eagle_sd`
@@ -201,7 +201,7 @@ Run:
 
 ```bash
 python -m run.main \
-	--method eagle_sd \
+	--config configs/methods/eagle_sd.yaml \
 	--llm-path meta-llama/Llama-3.1-8B-Instruct \
 	--draft-model-path ~/checkpoints/eagle/official/EAGLE-Llama-3.1-8B-Instruct \
 	--device cuda:0 \

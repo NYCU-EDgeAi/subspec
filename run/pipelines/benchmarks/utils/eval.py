@@ -37,7 +37,7 @@ def run_common_eval(generator, tokenizer, past_key_values, draft_past_key_values
     if os.environ.get("DETAILED_ANALYSIS", "False") == "True":
         detailed_log_file = os.path.join(log_dir, f"detailed_analysis.jsonl")
     tput_list, tacc_list, draft_time_list, target_time_list = [], [], [], []
-    skip_spec_count_list, regular_count_list = [], []
+    post_verify_count_list, speculate_count_list = [], []
     for idx, query in tqdm(enumerate(dataset), total=len(dataset), desc="Evaluating", leave=True):
         messages = [{"role": "user", "content": query}]
         tokenizer.use_default_system_prompt = True
@@ -75,10 +75,10 @@ def run_common_eval(generator, tokenizer, past_key_values, draft_past_key_values
             draft_time_list.append(exp_log.get("avg_draft_time", 0))
         if exp_log.get("avg_target_time", None) is not None:
             target_time_list.append(exp_log.get("avg_target_time", 0))
-        if exp_log.get("regular_count", None) is not None:
-            regular_count_list.append(exp_log.get("regular_count", 0))
-        if exp_log.get("skip_spec_count", None) is not None:
-            skip_spec_count_list.append(exp_log.get("skip_spec_count", 0))
+        if exp_log.get("speculate_count", None) is not None:
+            speculate_count_list.append(exp_log.get("speculate_count", 0))
+        if exp_log.get("post_verify_count", None) is not None:
+            post_verify_count_list.append(exp_log.get("post_verify_count", 0))
             
         del input_ids, output_ids
         gc.collect()
@@ -89,15 +89,15 @@ def run_common_eval(generator, tokenizer, past_key_values, draft_past_key_values
     tacc_mean, tacc_std = np.mean(tacc_list), np.std(tacc_list) if tacc_list else 0
     avg_draft_time, avg_target_time = np.mean(draft_time_list), np.mean(target_time_list)
     peak_memory = torch.cuda.max_memory_reserved(args.device)/(1024**3)
-    skip_spec_rate = np.sum(skip_spec_count_list) / (np.sum(skip_spec_count_list) + np.sum(regular_count_list)) if (np.sum(skip_spec_count_list) + np.sum(regular_count_list)) > 0 else 0
+    post_verify_rate = np.sum(post_verify_count_list) / (np.sum(post_verify_count_list) + np.sum(speculate_count_list)) if (np.sum(post_verify_count_list) + np.sum(speculate_count_list)) > 0 else 0
     
     print(f"\tThroughput: {tput_mean:.3f} ± {tput_std:.3f} tokens/sec")
     print(f"\tAcceptance Length: {tacc_mean:.3f} ± {tacc_std:.3f} tokens/iter")
     print(f"\tAverage Draft Time: {avg_draft_time:.3f} sec")
     print(f"\tAverage Target Time: {avg_target_time:.3f} sec")
     print(f"\tPeak Memory: {peak_memory:.3f} GiB")
-    if exp_log.get('skip_spec_count', None) is not None:
-        print(f"\tSkip Speculate Rate: {skip_spec_rate:.3f}")
+    if exp_log.get('post_verify_count', None) is not None:
+        print(f"\tPost-Verify Rate: {post_verify_rate:.3f}")
     
     # return tput_mean, tput_std, tacc_mean, tacc_std, avg_draft_time, avg_target_time, peak_memory
     return {
@@ -106,7 +106,7 @@ def run_common_eval(generator, tokenizer, past_key_values, draft_past_key_values
         "avg_draft_time": float(avg_draft_time),
         "avg_target_time": float(avg_target_time),
         "peak_memory_gib": float(peak_memory),
-        "skip_spec_rate": float(skip_spec_rate) if exp_log.get('skip_spec_count', None) is not None else 0,
+        "post_verify_rate": float(post_verify_rate) if exp_log.get('post_verify_count', None) is not None else 0,
     }
 
 
@@ -134,11 +134,22 @@ def run_mtbench_eval(generator, tokenizer, past_key_values, draft_past_key_value
     # Evaluate dataset
     log_file = os.path.join(log_dir, f"0.jsonl")
     tput_list, tacc_list, draft_time_list, target_time_list = [], [], [], []
-    skip_spec_count_list, regular_count_list = [], []
+    post_verify_count_list, speculate_count_list = [], []
     for idx, turns in tqdm(enumerate(dataset), total=len(dataset), desc="Evaluating", leave=True):
         # org_len = 0
         exp_log = {}
-        tmp_exp_log = {'total_sampled': 0, 'total_draft_time': 0, 'total_target_time': 0, 'total_verify_time': 0, 'n_iter': 0, 'n_tokens': 0, 'elapsed_time': 0}
+        tmp_exp_log = {
+            'total_sampled': 0,
+            'total_draft_time': 0,
+            'total_target_time': 0,
+            'total_verify_time': 0,
+            'n_iter': 0,
+            'n_tokens': 0,
+            'elapsed_time': 0,
+            # Optional counters (only present for some generators, e.g. SubSpec SD v2).
+            'post_verify_count': None,
+            'speculate_count': None,
+        }
         messages = []
         for tid, query in enumerate(turns):
             # print(f"Turn {tid+1}/{len(turns)} -> {query}"
@@ -168,17 +179,20 @@ def run_mtbench_eval(generator, tokenizer, past_key_values, draft_past_key_value
             tmp_exp_log['total_draft_time'] += wandb_logger.log_data.get('avg_draft_time', 0) * n_iter
             tmp_exp_log['total_target_time'] += wandb_logger.log_data.get('avg_target_time', 0) * n_iter
             tmp_exp_log['total_verify_time'] += wandb_logger.log_data.get('avg_verify_time', 0) * n_iter
-            tmp_exp_log['skip_spec_count'] += wandb_logger.log_data.get('skip_spec_count', 0)
-            tmp_exp_log['regular_count'] += wandb_logger.log_data.get('regular_count', 0)
+
+            # Accumulate optional speculative decoding counters only if the generator reported them.
+            if 'post_verify_count' in wandb_logger.log_data and 'speculate_count' in wandb_logger.log_data:
+                if tmp_exp_log['post_verify_count'] is None:
+                    tmp_exp_log['post_verify_count'] = 0
+                if tmp_exp_log['speculate_count'] is None:
+                    tmp_exp_log['speculate_count'] = 0
+                tmp_exp_log['post_verify_count'] += wandb_logger.log_data.get('post_verify_count', 0)
+                tmp_exp_log['speculate_count'] += wandb_logger.log_data.get('speculate_count', 0)
             
             exp_log = {**exp_log, tid: {**wandb_logger.log_data, "query": query, "response": output_message, "peak_memory": torch.cuda.max_memory_reserved(args.device)/(1024**3)}}
             messages.append({"role": "system", "content": output_message})
             
-            # # log spec_skip/regular count
-            # if hasattr(generator, 'skip_spec_count') and generator.skip_spec_count is not None:
-            #     logging.info(f"Skip Spec count: {generator.skip_spec_count}, Regular count: {generator.regular_count}")
-            #     skip_spec_count_list.append(generator.skip_spec_count)
-            #     regular_count_list.append(generator.regular_count)
+            # (Counters are logged via wandb_logger by SDProfilingMixin when available.)
             
             del input_ids, output_ids
             gc.collect()
@@ -197,11 +211,16 @@ def run_mtbench_eval(generator, tokenizer, past_key_values, draft_past_key_value
             "n_tokens": tmp_exp_log['n_tokens'], 
             "avg_sampled": tmp_exp_log['total_sampled'] / tmp_exp_log['n_iter'] if tmp_exp_log['n_iter'] > 0 else 0,
             "elapsed_time": tmp_exp_log['elapsed_time'],
-            "tput": tmp_exp_log['n_tokens'] / tmp_exp_log['elapsed_time'],
-            "skip_spec_count": tmp_exp_log['skip_spec_count'],
-            "regular_count": tmp_exp_log['regular_count'],
-            "spec_skip_rate": tmp_exp_log['skip_spec_count'] / (tmp_exp_log['skip_spec_count'] + tmp_exp_log['regular_count']) if (tmp_exp_log['skip_spec_count'] + tmp_exp_log['regular_count']) > 0 else 0,  
+            "tput": tmp_exp_log['n_tokens'] / tmp_exp_log['elapsed_time'] if tmp_exp_log['elapsed_time'] > 0 else 0,
         }
+
+        if tmp_exp_log['post_verify_count'] is not None and tmp_exp_log['speculate_count'] is not None:
+            overall_log.update({
+                "post_verify_count": tmp_exp_log['post_verify_count'],
+                "speculate_count": tmp_exp_log['speculate_count'],
+                "post_verify_rate": tmp_exp_log['post_verify_count'] / (tmp_exp_log['post_verify_count'] + tmp_exp_log['speculate_count'])
+                if (tmp_exp_log['post_verify_count'] + tmp_exp_log['speculate_count']) > 0 else 0,
+            })
         
         exp_log = {
             **exp_log,
@@ -221,26 +240,28 @@ def run_mtbench_eval(generator, tokenizer, past_key_values, draft_past_key_value
         if overall_log.get("avg_target_time", None) is not None:
             target_time_list.append(overall_log.get("avg_target_time", 0))
         
-        # log spec_skip/regular count
-        if overall_log.get("skip_spec_count", None) is not None:
-            logging.info(f"Skip count: {overall_log.get('skip_spec_count', 0)}, Regular count: {overall_log.get('regular_count', 0)}")
-            skip_spec_count_list.append(overall_log.get('skip_spec_count', 0))
-            regular_count_list.append(overall_log.get('regular_count', 0))
+        # log post-verify/speculate count (only when supported)
+        if overall_log.get("post_verify_count", None) is not None:
+            logging.info(
+                f"Post-verify count: {overall_log.get('post_verify_count', 0)}, Speculate count: {overall_log.get('speculate_count', 0)}"
+            )
+            post_verify_count_list.append(overall_log.get('post_verify_count', 0))
+            speculate_count_list.append(overall_log.get('speculate_count', 0))
             
     print(f"Final Results:")
     tput_mean, tput_std = np.mean(tput_list), np.std(tput_list)
     tacc_mean, tacc_std = np.mean(tacc_list), np.std(tacc_list) if tacc_list else 0
     avg_draft_time, avg_target_time = np.mean(draft_time_list), np.mean(target_time_list)
     peak_memory = torch.cuda.max_memory_reserved(args.device)/(1024**3)
-    skip_spec_rate = np.sum(skip_spec_count_list) / (np.sum(skip_spec_count_list) + np.sum(regular_count_list)) if (np.sum(skip_spec_count_list) + np.sum(regular_count_list)) > 0 else 0
+    post_verify_rate = np.sum(post_verify_count_list) / (np.sum(post_verify_count_list) + np.sum(speculate_count_list)) if (np.sum(post_verify_count_list) + np.sum(speculate_count_list)) > 0 else 0
     
     print(f"\tThroughput: {tput_mean:.3f} ± {tput_std:.3f} tokens/sec")
     print(f"\tAcceptance Length: {tacc_mean:.3f} ± {tacc_std:.3f} tokens/iter")
     print(f"\tAverage Draft Time: {avg_draft_time:.3f} sec")
     print(f"\tAverage Target Time: {avg_target_time:.3f} sec")
     print(f"\tPeak Memory: {peak_memory:.3f} GiB")
-    if hasattr(generator, 'skip_spec_count') and generator.skip_spec_count is not None:
-        print(f"\tSkip Speculate Rate: {skip_spec_rate:.3f}")
+    if hasattr(generator, 'post_verify_count') and generator.post_verify_count is not None:
+        print(f"\tPost-Verify Rate: {post_verify_rate:.3f}")
     
     # return tput_mean, tput_std, tacc_mean, tacc_std, avg_draft_time, avg_target_time, peak_memory
     return {
@@ -249,5 +270,5 @@ def run_mtbench_eval(generator, tokenizer, past_key_values, draft_past_key_value
         "avg_draft_time": float(avg_draft_time),
         "avg_target_time": float(avg_target_time),
         "peak_memory_gib": float(peak_memory),
-        "skip_spec_rate": float(skip_spec_rate) if hasattr(generator, 'skip_spec_count') and generator.skip_spec_count is not None else 0,
+        "post_verify_rate": float(post_verify_rate) if hasattr(generator, 'post_verify_count') and generator.post_verify_count is not None else 0,
     }

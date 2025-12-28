@@ -20,6 +20,9 @@ from .core.router import run_app
 from .core.config_utils import instantiate_recipe
 
 
+BENCHMARK_COMMANDS = {"run-benchmark", "run-benchmark-acc", "run-benchmark-agent"}
+
+
 def _deep_merge_dict(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
     if not override:
         return dict(base)
@@ -59,14 +62,11 @@ def _load_yaml_config(path: str) -> Dict[str, Any]:
     return dict(data)
 
 
-
-
-def _argv_has_flag(flag: str) -> bool:
-    # Handles both: --flag value  and  --flag=value
-    for a in sys.argv[1:]:
-        if a == flag or a.startswith(flag + "="):
-            return True
-    return False
+def _resolve_existing_path(path: str) -> str:
+    resolved = os.path.abspath(os.path.expanduser(path))
+    if not os.path.exists(resolved):
+        raise FileNotFoundError(resolved)
+    return resolved
 
 
 def _normalize_compile_mode(value):
@@ -102,64 +102,36 @@ def _apply_yaml_overrides(default_config: Dict[str, Any], yaml_config: Dict[str,
 
     return _deep_merge_dict(default_config, cfg)
 
-def main():
-    # Reduce run-to-run drift from cuBLAS matmul reductions.
-    # Important: set before the first CUDA context initialization.
-    os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":16:8")
 
-    # 1. Register presets
-    register_presets()
-
-    # 2. Parse method + optional YAML config path first to load defaults
+def _build_base_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("--method", type=str, default="subspec_sd", help="Decoding method to use")
+    parser.add_argument(
+        "--method",
+        type=str,
+        default=None,
+        help="Decoding method to use (overrides YAML `method`)",
+    )
     parser.add_argument(
         "--config",
         type=str,
-        default=None,
-        help="Path to a YAML config file. Values override method defaults; CLI args override YAML.",
+        required=True,
+        help="Path to a YAML config file. Required. Values override method defaults; CLI args override YAML.",
     )
-    
-    # We use parse_known_args to get the method/config, then we can look up defaults
-    args, _ = parser.parse_known_args()
+    return parser
 
-    # Optional YAML config can supply defaults (and optionally method).
-    yaml_config: Dict[str, Any] = {}
-    if args.config:
-        config_path = os.path.abspath(os.path.expanduser(args.config))
-        if not os.path.exists(config_path):
-            print(f"Config file not found: {config_path}")
-            sys.exit(1)
-        yaml_config = _load_yaml_config(config_path)
 
-        # If user did NOT explicitly provide --method, allow YAML to select method.
-        if not _argv_has_flag("--method") and isinstance(yaml_config.get("method"), str):
-            args.method = yaml_config["method"]
-    
-    # 3. Get default config for the method
-    method_entry = ModelRegistry.get(args.method)
-    if method_entry is None:
-        print(f"Unknown method: {args.method}. Available methods: {ModelRegistry.list_methods()}")
-        sys.exit(1)
-        
-    default_config = method_entry.default_config.copy()
+def _build_full_parser(base_parser: argparse.ArgumentParser, default_config: Dict[str, Any]) -> argparse.ArgumentParser:
+    full_parser = argparse.ArgumentParser(parents=[base_parser], add_help=False)
 
-    # Merge YAML into default_config (defaults <- yaml).
-    default_config = _apply_yaml_overrides(default_config, yaml_config)
-    
-    # 4. Create full parser for AppConfig
-    # We populate arguments based on AppConfig fields, but respecting the method's defaults
-    full_parser = argparse.ArgumentParser(parents=[parser], add_help=False)
-    
-    # Helper to add arguments from config dataclass
-    # For simplicity, we manually add common ones or general ones. 
-    # A robust solution would inspect the dataclass.
-    # Here we just add the key ones we expect to override.
-    
-    full_parser.add_argument("--llm-path", type=str, default=default_config.get("llm_path", "meta-llama/Llama-3.1-8B-Instruct"))
+    full_parser.add_argument(
+        "--llm-path",
+        type=str,
+        default=default_config.get("llm_path", "meta-llama/Llama-3.1-8B-Instruct"),
+    )
     full_parser.add_argument("--draft-model-path", type=str, default=default_config.get("draft_model_path", None))
     full_parser.add_argument("--max-length", type=int, default=default_config.get("max_length", 2048))
     full_parser.add_argument("--seed", type=int, default=default_config.get("seed", 0))
+    # NOTE: keep the historical default here; method/yaml overrides can still provide device via other means.
     full_parser.add_argument("--device", type=str, default="cuda:0")
     full_parser.add_argument("--compile-mode", type=str, default=default_config.get("compile_mode", None))
     full_parser.add_argument("--temperature", type=float, default=default_config.get("temperature", 0.0))
@@ -174,7 +146,7 @@ def main():
         help="KV-cache mode: dynamic or static",
     )
 
-    # Common generator_kwargs override
+    # generator_kwargs overrides
     default_prefill = (default_config.get("generator_kwargs") or {}).get("prefill_chunk_size", None)
     full_parser.add_argument(
         "--prefill-chunk-size",
@@ -183,7 +155,6 @@ def main():
         help="Generator prefill chunk size (sets generator_kwargs.prefill_chunk_size)",
     )
 
-    # Allow turning profiling on/off explicitly.
     full_parser.add_argument(
         "--generator-profiling",
         action=argparse.BooleanOptionalAction,
@@ -191,7 +162,7 @@ def main():
         help="Enable/disable generator profiling",
     )
 
-    default_lossy_verify = bool(default_config.get("generator_kwargs", {}).get("lossy_verify", False))
+    default_lossy_verify = bool((default_config.get("generator_kwargs") or {}).get("lossy_verify", False))
     full_parser.add_argument(
         "--lossy-verify",
         action="store_true",
@@ -212,19 +183,28 @@ def main():
         default=None,
         help="Lossy SD: require this many future locally-correct draft nodes (lookahead)",
     )
-    
-    # Parse again with known args to override defaults
-    # We still use parse_known_args because run_app (Typer) needs the rest
-    config_args, typer_argv = full_parser.parse_known_args()
-    
-    # 5. Build AppConfig
-    config = AppConfig()
-    config.method = args.method
-    
-    # Update config from defaults
-    config.update(default_config)
-    
-    # Update config from CLI args
+
+    return full_parser
+
+
+def _enforce_benchmark_requires_config(typer_argv: list[str], config_path: str | None) -> None:
+    if typer_argv and typer_argv[0] in BENCHMARK_COMMANDS and config_path is None:
+        print(
+            "Error: benchmark commands require a YAML config via --config.\n"
+            "Example: python -m run.main --config configs/methods/subspec_sd.yaml run-benchmark --benchmarks mt-bench --max-samples 20"
+        )
+        sys.exit(2)
+
+
+def _resolve_method(cli_method: str | None, yaml_config: Dict[str, Any]) -> str:
+    if isinstance(cli_method, str) and cli_method.strip():
+        return cli_method
+    if isinstance(yaml_config.get("method"), str) and yaml_config["method"].strip():
+        return yaml_config["method"]
+    raise ValueError("Missing `method`: specify --method or set `method:` in the YAML config.")
+
+
+def _apply_cli_overrides(config: AppConfig, config_args: argparse.Namespace) -> None:
     config.llm_path = config_args.llm_path
     config.draft_model_path = config_args.draft_model_path
     config.max_length = int(config_args.max_length)
@@ -237,27 +217,91 @@ def main():
     config.cache_implementation = config_args.cache_implementation
     config.generator_profiling = bool(config_args.generator_profiling)
 
-    # Apply generator_kwargs override(s)
+
+def _apply_generator_kwargs_overrides(config: AppConfig, config_args: argparse.Namespace) -> None:
     if config.generator_kwargs is None:
         config.generator_kwargs = {}
+
     if config_args.prefill_chunk_size is not None:
         config.generator_kwargs["prefill_chunk_size"] = int(config_args.prefill_chunk_size)
 
     # Verifier mode switch (applies to tree-based SD generators that route through verify_tree).
     config.generator_kwargs["lossy_verify"] = bool(config_args.lossy_verify)
 
-    # Apply DraftParams overrides.
-    # Note: these are verifier-specific and only affect methods that actually use draft_params.
-    if config_args.lossy_threshold is not None or config_args.lossy_window_size is not None:
-        from specdecodes.models.utils.utils import DraftParams
 
-        if config.draft_params is None:
-            config.draft_params = DraftParams()
+def _apply_draft_params_overrides(config: AppConfig, config_args: argparse.Namespace) -> None:
+    if config_args.lossy_threshold is None and config_args.lossy_window_size is None:
+        return
 
-        if config_args.lossy_threshold is not None:
-            config.draft_params.lossy_threshold = float(config_args.lossy_threshold)
-        if config_args.lossy_window_size is not None:
-            config.draft_params.lossy_window_size = int(config_args.lossy_window_size)
+    from specdecodes.models.utils.utils import DraftParams
+
+    if config.draft_params is None:
+        config.draft_params = DraftParams()
+
+    if config_args.lossy_threshold is not None:
+        config.draft_params.lossy_threshold = float(config_args.lossy_threshold)
+    if config_args.lossy_window_size is not None:
+        config.draft_params.lossy_window_size = int(config_args.lossy_window_size)
+
+def main():
+    # Reduce run-to-run drift from cuBLAS matmul reductions.
+    # Important: set before the first CUDA context initialization.
+    os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":16:8")
+
+    # 1. Register presets
+    register_presets()
+
+    # 2. Parse method + YAML config path first to load defaults
+    base_parser = _build_base_parser()
+    args, _ = base_parser.parse_known_args()
+
+    # YAML config is required for all runs.
+    try:
+        config_path = _resolve_existing_path(args.config)
+    except FileNotFoundError:
+        print(f"Config file not found: {os.path.abspath(os.path.expanduser(args.config))}")
+        sys.exit(1)
+    yaml_config = _load_yaml_config(config_path)
+
+    try:
+        args.method = _resolve_method(args.method, yaml_config)
+    except ValueError as e:
+        print(f"Error: {e}")
+        sys.exit(2)
+    
+    # 3. Get default config for the method
+    method_entry = ModelRegistry.get(args.method)
+    if method_entry is None:
+        print(f"Unknown method: {args.method}. Available methods: {ModelRegistry.list_methods()}")
+        sys.exit(1)
+        
+    default_config = method_entry.default_config.copy()
+
+    # Merge YAML into default_config (defaults <- yaml).
+    default_config = _apply_yaml_overrides(default_config, yaml_config)
+    
+    # 4. Create full parser for AppConfig
+    # We populate arguments based on AppConfig fields, but respecting the method's defaults
+    full_parser = _build_full_parser(base_parser, default_config)
+    
+    # Parse again with known args to override defaults
+    # We still use parse_known_args because run_app (Typer) needs the rest
+    config_args, typer_argv = full_parser.parse_known_args()
+
+    # (Kept for backward compatibility + explicit error messaging if this file is reused elsewhere.)
+    _enforce_benchmark_requires_config(typer_argv, args.config)
+    
+    # 5. Build AppConfig
+    config = AppConfig()
+    config.method = args.method
+    
+    # Update config from defaults
+    config.update(default_config)
+    
+    # Update config from CLI args
+    _apply_cli_overrides(config, config_args)
+    _apply_generator_kwargs_overrides(config, config_args)
+    _apply_draft_params_overrides(config, config_args)
 
     # Allow YAML to specify recipes via import path + kwargs.
     config.recipe = instantiate_recipe(getattr(config, "recipe", None))

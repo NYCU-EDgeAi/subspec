@@ -303,10 +303,20 @@ class SDProfilingMixin:
         wandb_logger.log_data['n_tokens'] = len(input_ids[0][org_input_len:])
         wandb_logger.log_data['elapsed_time'] = elapsed_time_s
         wandb_logger.log_data['tput'] = len(input_ids[0][org_input_len:]) / elapsed_time_s
-        if wandb_logger.log_data.get('skip_spec_count', None) is not None:
-            wandb_logger.log_data['skip_spec_count'] = self.skip_spec_count
-            wandb_logger.log_data['regular_count'] = self.regular_count
-            wandb_logger.log_data['spec_skip_rate'] = self.skip_spec_count / (self.skip_spec_count + self.regular_count)
+
+        # Optional: speculative decoding counters.
+        # Some generators expose these; log them whenever present.
+        post_verify_count = getattr(self, "post_verify_count", None)
+        speculate_count = getattr(self, "speculate_count", None)
+        if post_verify_count is not None and speculate_count is not None:
+            post_verify_count = int(post_verify_count)
+            speculate_count = int(speculate_count)
+
+            wandb_logger.log_data['post_verify_count'] = post_verify_count
+            wandb_logger.log_data['speculate_count'] = speculate_count
+
+            denom = post_verify_count + speculate_count
+            wandb_logger.log_data['post_verify_rate'] = (float(post_verify_count) / float(denom)) if denom > 0 else 0.0
         
         if self.profiling_verbose:
             logging.info(
