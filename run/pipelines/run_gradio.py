@@ -7,7 +7,7 @@ import os
 from tqdm import trange
 import nvtx
 
-def main(builder):
+def main(builder, host: str = "127.0.0.1", port: int = 7860, share: bool = False):
     # set logging level by environment variable
     LOGLEVEL = os.environ.get("LOGLEVEL", "INFO").upper()
     logging.basicConfig(level=LOGLEVEL)
@@ -144,4 +144,4 @@ def main(builder):
         )
         
     print("Launching Gradio app...")
-    demo.launch(share=True)
+    demo.launch(server_name=host, server_port=int(port), share=bool(share))

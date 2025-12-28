@@ -11,14 +11,16 @@ This repository is the official implementation of *"Speculate Deep and Accurate:
 	- [YAML configs (recommended)](#yaml-configs-recommended)
 	- [Available Methods](#available-methods)
 	- [Common Arguments](#common-arguments)
-- [Testing](#testing)
 - [Evaluation](#evaluation)
 	- [Examples](#examples)
 - [Results](#results)
-- [OpenAI-Compatible API Server](#openai-compatible-api-server)
-	- [Run the server](#run-the-server)
-	- [Example: eagle_sd](#example-eagle_sd)
-	- [Quick API checks](#quick-api-checks)
+- [Interfaces](#interfaces)
+	- [Gradio Demo](#gradio-demo)
+	- [OpenAI-Compatible API Server](#openai-compatible-api-server)
+		- [Run the server](#run-the-server)
+		- [Example: eagle_sd](#example-eagle_sd)
+		- [Quick API checks](#quick-api-checks)
+- [Testing](#testing)
 
 ## Requirements
 
@@ -36,6 +38,12 @@ Install the rest of the base requirements:
 ```bash
 pip install "smolagents[toolkit]"
 pip install -r requirements.txt
+```
+
+If you want to use the Gradio UI:
+
+```bash
+pip install gradio
 ```
 
 You will need to install the additional libraries for quantization:
@@ -102,20 +110,6 @@ The following methods are available (registered in `run/core/presets.py`):
 - `--warmup-iter`: Number of warmup iterations. Default varies by method (typically 1).
 - `--compile-mode`: Torch compile mode (e.g., `reduce-overhead`, `max-autotune`, or `none`). Defaults to `none`.
 
-## Testing
-
-Run the unit tests with:
-
-```bash
-pytest -q
-```
-
-Some tests that run real model workloads are skipped by default. To enable them:
-
-```bash
-SUBSPEC_RUN_REAL_MODEL_TESTS=1 pytest -q
-```
-
 ## Evaluation
 
 ```bash
@@ -160,11 +154,28 @@ Below is the result for accelerating Qwen2.5 7B with tree-based speculative deco
 
 > For EAGLE's draft model, you will need to download the pretrained model manually, then convert it with the 'convert_eagle_weights.ipynb' script before use.
 
-## OpenAI-Compatible API Server
+## Interfaces
+
+### Gradio Demo
+
+Launch an interactive chat UI:
+
+```bash
+python -m run.main --method <method_name> run-gradio --host 127.0.0.1 --port 7860
+```
+
+To expose it on your network (or use a public share link):
+
+```bash
+python -m run.main --method <method_name> run-gradio --host 0.0.0.0 --port 7860
+python -m run.main --method <method_name> run-gradio --share
+```
+
+### OpenAI-Compatible API Server
 
 This repo includes an OpenAI-compatible HTTP server implemented in [run/pipelines/run_api.py](run/pipelines/run_api.py).
 
-### Run the server
+#### Run the server
 
 1) Activate your environment:
 
@@ -178,7 +189,7 @@ conda activate ~/envs/subspec
 python -m run.main --method <method_name> run-api --host 0.0.0.0 --port 8000
 ```
 
-### Example: `eagle_sd`
+#### Example: `eagle_sd`
 
 `eagle_sd` requires both a target model (`--llm-path`) and a draft model (`--draft-model-path`). The default draft path in the preset is:
 
@@ -198,7 +209,7 @@ python -m run.main \
 	run-api --host 0.0.0.0 --port 8000
 ```
 
-### Quick API checks
+#### Quick API checks
 
 ```bash
 curl http://127.0.0.1:8000/health
@@ -219,4 +230,18 @@ Chat completions (stream):
 curl -N http://127.0.0.1:8000/v1/chat/completions \
 	-H 'Content-Type: application/json' \
 	-d '{"messages":[{"role":"user","content":"Count to three"}],"max_tokens":32,"temperature":0,"stream":true}'
+```
+
+## Testing
+
+Run the unit tests with:
+
+```bash
+pytest -q
+```
+
+Some tests that run real model workloads are skipped by default. To enable them:
+
+```bash
+SUBSPEC_RUN_REAL_MODEL_TESTS=1 pytest -q
 ```

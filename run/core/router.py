@@ -76,14 +76,18 @@ def run_app(builder):
         main_run_benchmark_agent(builder, benchmarks=benchmarks, max_samples=max_samples)
 
     @app.command()
-    def run_gradio():
-        """
-        Example subcommand for launching a Gradio demo.
+    def run_gradio(
+        host: str = typer.Option("127.0.0.1", help="Host/interface to bind the Gradio server"),
+        port: int = typer.Option(7860, help="Port to bind the Gradio server"),
+        share: bool = typer.Option(False, help="Create a public Gradio share link"),
+    ):
+        """Launch a Gradio chat playground.
+
         Usage:
-            python custom.py run-gradio
+            python -m run.main --method subspec_sd run-gradio --host 0.0.0.0 --port 7860
         """
         from run.pipelines.run_gradio import main as run_gradio_main
-        run_gradio_main(builder)
+        run_gradio_main(builder, host=host, port=port, share=share)
 
     @app.command()
     def run_api(
