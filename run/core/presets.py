@@ -7,7 +7,13 @@ from .registry import ModelRegistry
 # --- Custom Loader Hooks ---
 
 def flashinfer_load_kv_cache(builder, target_model, draft_model):
-    from specdecodes.models.utils.flashinfer.cache_manager import FlashInferCache
+    try:
+        from specdecodes.models.utils.flashinfer.cache_manager import FlashInferCache
+    except ModuleNotFoundError as e:
+        raise ImportError(
+            f"Method '{builder.config.method}' requires the optional dependency 'flashinfer'.\n"
+            "Hint: install it (and its deps), e.g. `pip install flashinfer-python`, then retry."
+        ) from e
 
     if builder.max_length is None:
         raise ValueError("max_length should be set for FlashInfer cache.")
@@ -34,12 +40,20 @@ def flashinfer_load_kv_cache(builder, target_model, draft_model):
     return past_key_values, draft_past_key_values
 
 def flashinfer_load_draft_model(builder, target_model, tokenizer, draft_model_path):
-    from specdecodes.models.utils.flashinfer.monkey_patch import apply_flashinfer_kernel_to_llama
+    try:
+        from specdecodes.models.utils.flashinfer.monkey_patch import apply_flashinfer_kernel_to_llama
+    except ModuleNotFoundError as e:
+        raise ImportError(
+            f"Method '{builder.config.method}' requires the optional dependency 'flashinfer'.\n"
+            "Hint: install it (and its deps), e.g. `pip install flashinfer`, then retry."
+        ) from e
     
     # We need to get the class from the registry entry that is currently being used/loaded.
     # However, builder.config.method gives us the method name.
     entry = ModelRegistry.get(builder.config.method)
-    draft_model_cls = entry.draft_model_cls
+    draft_model_cls = entry.get_draft_model_cls() if entry else None
+    if draft_model_cls is None:
+        raise ImportError(f"Draft model class not registered for method '{builder.config.method}'.")
     
     draft_model = draft_model_cls.from_pretrained(
         draft_model_path,
@@ -55,7 +69,9 @@ def flashinfer_load_draft_model(builder, target_model, tokenizer, draft_model_pa
 def eagle_load_draft_model(builder, target_model, tokenizer, draft_model_path):
     import os
     entry = ModelRegistry.get(builder.config.method)
-    draft_model_cls = entry.draft_model_cls
+    draft_model_cls = entry.get_draft_model_cls() if entry else None
+    if draft_model_cls is None:
+        raise ImportError(f"Draft model class not registered for method '{builder.config.method}'.")
     
     # Eagle usually needs .to(device) explicitly if device_map is not passed or if it behaves differently
     # Expand path just in case
@@ -153,44 +169,37 @@ def register_presets():
     except ImportError:
         pass
 
-    # Classic SD FlashInfer
-    try:
-        from specdecodes.models.generators.classic_sd_fi import ClassicSDGenerator as ClassicSDGeneratorFI
-        from specdecodes.models.draft_models.classic_sd_fi import ClassicSDDraftModel as ClassicSDDraftModelFI
-        
-        ModelRegistry.register(
-            name="classic_sd_fi",
-            generator_cls=ClassicSDGeneratorFI,
-            draft_model_cls=ClassicSDDraftModelFI,
-            default_config={
-                "llm_path": "meta-llama/Llama-3.1-8B-Instruct",
-                "draft_model_path": "meta-llama/Llama-3.2-1B-Instruct",
-                "recipe": None,
-            },
-            load_draft_model_fn=flashinfer_load_draft_model,
-            load_kv_cache_fn=flashinfer_load_kv_cache
-        )
-    except ImportError:
-        pass 
+    # Classic SD FlashInfer (lazy import)
+    ModelRegistry.register(
+        name="classic_sd_fi",
+        generator_cls="specdecodes.models.generators.classic_sd_fi:ClassicSDGenerator",
+        draft_model_cls="specdecodes.models.draft_models.classic_sd_fi:ClassicSDDraftModel",
+        default_config={
+            "llm_path": "meta-llama/Llama-3.1-8B-Instruct",
+            "draft_model_path": "meta-llama/Llama-3.2-1B-Instruct",
+            "recipe": None,
+        },
+        load_draft_model_fn=flashinfer_load_draft_model,
+        load_kv_cache_fn=flashinfer_load_kv_cache,
+    )
 
-    # SubSpec SD FlashInfer
+    # SubSpec SD FlashInfer (lazy import)
     try:
-        from specdecodes.models.generators.subspec_sd_fi import SubSpecSDGenerator as SubSpecSDGeneratorFI
-        from specdecodes.models.draft_models.subspec_sd_fi import SubSpecSDDraftModel as SubSpecSDDraftModelFI
         from specdecodes.helpers.recipes.subspec.hqq_4bit_attn_4bit_mlp import Recipe as SubSpecRecipeV1
 
         ModelRegistry.register(
             name="subspec_sd_fi",
-            generator_cls=SubSpecSDGeneratorFI,
-            draft_model_cls=SubSpecSDDraftModelFI,
+            generator_cls="specdecodes.models.generators.subspec_sd_fi:SubSpecSDGenerator",
+            draft_model_cls="specdecodes.models.draft_models.subspec_sd_fi:SubSpecSDDraftModel",
             default_config={
                 "llm_path": "meta-llama/Llama-3.1-8B-Instruct",
                 "recipe": SubSpecRecipeV1(),
             },
             load_draft_model_fn=flashinfer_load_draft_model,
-            load_kv_cache_fn=flashinfer_load_kv_cache
+            load_kv_cache_fn=flashinfer_load_kv_cache,
         )
     except ImportError:
+        # If the base SubSpec recipe isn't importable, don't register this method.
         pass
 
     # Classic SD Seq
