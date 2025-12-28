@@ -8,7 +8,7 @@ recipe:
 
 max_length: 4096
 cache_implementation: static
-warmup_iter: 3
+warmup_iter: 1
 compile_mode: max-autotune
 
 generator_profiling: true

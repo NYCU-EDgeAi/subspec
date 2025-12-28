@@ -216,6 +216,12 @@ class GeneratorPipelineBuilder:
         """
         Compile the generator's forward methods.
         """
+        if not hasattr(torch, "compile"):
+            raise RuntimeError(
+                "compile_mode is set but torch.compile is unavailable. "
+                "Please use PyTorch 2.x or disable compile_mode."
+            )
+
         logging.info(f"Compiling generator with mode: {self.compile_mode}")
 
         # If the target model uses offloading, torch.compile() (especially fullgraph/cudagraph-related paths)
@@ -228,7 +234,15 @@ class GeneratorPipelineBuilder:
 
         # Compile draft model if it exists
         if getattr(generator, 'draft_model', None) is not None:
-            generator.draft_model.forward = torch.compile(generator.draft_model.forward, mode=self.compile_mode, dynamic=False, fullgraph=True)
+            # FlashInfer methods generally require fullgraph=False to work.
+            method_name = str(getattr(self.config, "method", ""))
+            draft_fullgraph = not method_name.endswith("_fi")
+            generator.draft_model.forward = torch.compile(
+                generator.draft_model.forward,
+                mode=self.compile_mode,
+                dynamic=False,
+                fullgraph=draft_fullgraph,
+            )
     
     def post_process(self, generator, tokenizer, past_kv, draft_past_kv):
         pass
