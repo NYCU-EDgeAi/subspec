@@ -791,6 +791,12 @@ def run_longbench_eval(generator, tokenizer, past_key_values, draft_past_key_val
             draft_past_key_values.reset()
     generator.profiling = original_profiling
 
+    # capture cuda-graph
+    if hasattr(generator, 'init_cuda_graph_runner') and callable(generator.init_cuda_graph_runner):
+        print("Generator has init_cuda_graph_runner. Initializing CUDA Graph runner...")
+        generator.init_cuda_graph_runner(args.device)
+        past_key_values.reset()
+        
     # 2. Main evaluation loop
     log_file = os.path.join(log_dir, "0.jsonl")
 

@@ -34,6 +34,12 @@ def run_agent_eval(generator, tokenizer, past_key_values, draft_past_key_values,
             draft_past_key_values.reset()
     generator.profiling = is_profiling
     
+    # capture cuda-graph
+    if hasattr(generator, 'init_cuda_graph_runner') and callable(generator.init_cuda_graph_runner):
+        print("Generator has init_cuda_graph_runner. Initializing CUDA Graph runner...")
+        generator.init_cuda_graph_runner(args.device)
+        past_key_values.reset()
+
     # Evaluate dataset
     log_file = os.path.join(log_dir, f"0.jsonl")
     tput_list, tacc_list, draft_time_list, target_time_list = [], [], [], []
