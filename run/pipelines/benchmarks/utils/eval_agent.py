@@ -10,6 +10,7 @@ import logging
 from smolagents import CodeAgent, ToolCallingAgent
 from specdecodes.helpers.wrappers import SpecDecodesModel
 from specdecodes.models.utils.wandb_logger import wandb_logger
+from run.pipelines.utils.eval_utils import reset_kv, maybe_init_cuda_graph_runner
 
 def run_agent_eval(generator, tokenizer, past_key_values, draft_past_key_values, args, dataset, log_dir):
     print("Running agent eval...")
@@ -29,16 +30,11 @@ def run_agent_eval(generator, tokenizer, past_key_values, draft_past_key_values,
             torch.cuda.empty_cache()
             agent.run(input_message)
 
-        past_key_values.reset()
-        if draft_past_key_values is not None:
-            draft_past_key_values.reset()
+        reset_kv(past_key_values, draft_past_key_values)
     generator.profiling = is_profiling
     
-    # capture cuda-graph
-    if hasattr(generator, 'init_cuda_graph_runner') and callable(generator.init_cuda_graph_runner):
-        print("Generator has init_cuda_graph_runner. Initializing CUDA Graph runner...")
-        generator.init_cuda_graph_runner(args.device)
-        past_key_values.reset()
+    # Optional CUDA-graph capture for FlashInfer, after warmup (stabilizes kernels/allocations).
+    maybe_init_cuda_graph_runner(generator, past_key_values, draft_past_key_values, args.device, args.warmup_iter)
 
     # Evaluate dataset
     log_file = os.path.join(log_dir, f"0.jsonl")
@@ -50,9 +46,7 @@ def run_agent_eval(generator, tokenizer, past_key_values, draft_past_key_values,
         with sdpa_kernel(backends=[SDPBackend.MATH]):
             output_message = agent.run(query)
             
-        past_key_values.reset()
-        if draft_past_key_values is not None:
-            draft_past_key_values.reset()
+        reset_kv(past_key_values, draft_past_key_values)
 
         exp_log = {**wandb_logger.log_data, "query": query, "response": output_message, "peak_mem": torch.cuda.max_memory_reserved(args.device)/(1024**3)}
         with open(log_file, 'a+') as f:

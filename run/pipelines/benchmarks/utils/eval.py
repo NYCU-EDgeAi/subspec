@@ -7,6 +7,7 @@ import torch
 import gc
 import logging
 from specdecodes.models.utils.wandb_logger import wandb_logger
+from run.pipelines.utils.eval_utils import reset_kv, maybe_init_cuda_graph_runner
 
 def run_common_eval(generator, tokenizer, past_key_values, draft_past_key_values, args, dataset, log_dir):
     # Warm up the model
@@ -23,11 +24,11 @@ def run_common_eval(generator, tokenizer, past_key_values, draft_past_key_values
             torch.cuda.empty_cache()
             generator.generate(input_ids, temperature=args.temperature, max_length=args.max_length, do_sample=args.do_sample, past_key_values=past_key_values, draft_past_key_values=draft_past_key_values)
 
-        past_key_values.reset()
-        
-        if draft_past_key_values is not None:
-            draft_past_key_values.reset()
+        reset_kv(past_key_values, draft_past_key_values)
     generator.profiling = is_profiling
+
+    # Optional CUDA-graph capture for FlashInfer, after warmup (stabilizes kernels/allocations).
+    maybe_init_cuda_graph_runner(generator, past_key_values, draft_past_key_values, args.device, args.warmup_iter)
     
     # Evaluate dataset
     log_file = os.path.join(log_dir, "0.jsonl")
@@ -52,9 +53,7 @@ def run_common_eval(generator, tokenizer, past_key_values, draft_past_key_values
                 draft_past_key_values=draft_past_key_values,
             )
 
-        past_key_values.reset()
-        if draft_past_key_values is not None:
-            draft_past_key_values.reset()
+        reset_kv(past_key_values, draft_past_key_values)
 
         output_message = tokenizer.decode(output_ids[0][input_ids.shape[1]:])
         exp_log = {**wandb_logger.log_data, "query": query, "response": output_message, "peak_memory": torch.cuda.max_memory_reserved(args.device)/(1024**3)}
@@ -120,11 +119,11 @@ def run_mtbench_eval(generator, tokenizer, past_key_values, draft_past_key_value
             torch.cuda.empty_cache()
             generator.generate(input_ids, temperature=args.temperature, max_length=args.max_length, do_sample=args.do_sample, past_key_values=past_key_values, draft_past_key_values=draft_past_key_values)
 
-        past_key_values.reset()
-        
-        if draft_past_key_values is not None:
-            draft_past_key_values.reset()
+        reset_kv(past_key_values, draft_past_key_values)
     generator.profiling = is_profiling
+
+    # Optional CUDA-graph capture for FlashInfer, after warmup (stabilizes kernels/allocations).
+    maybe_init_cuda_graph_runner(generator, past_key_values, draft_past_key_values, args.device, args.warmup_iter)
 
     # Evaluate dataset
     log_file = os.path.join(log_dir, "0.jsonl")
@@ -189,9 +188,7 @@ def run_mtbench_eval(generator, tokenizer, past_key_values, draft_past_key_value
             gc.collect()
             torch.cuda.empty_cache()
         
-        past_key_values.reset()
-        if draft_past_key_values is not None:
-            draft_past_key_values.reset()
+        reset_kv(past_key_values, draft_past_key_values)
         
         overall_log = {
             "avg_draft_time": tmp_exp_log['total_draft_time'] / tmp_exp_log['n_iter'] if tmp_exp_log['n_iter'] > 0 else 0,

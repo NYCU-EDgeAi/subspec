@@ -19,6 +19,7 @@ from .utils import (
     code_sim_score,
 )
 from specdecodes.models.utils.wandb_logger import wandb_logger
+from run.pipelines.utils.eval_utils import reset_kv, maybe_init_cuda_graph_runner
 
 dataset2metric = {
     "narrativeqa": qa_f1_score,
@@ -86,9 +87,7 @@ def run_gsm8k_eval(generator, tokenizer, past_key_values, draft_past_key_values,
                 draft_past_key_values=draft_past_key_values
             )
 
-        past_key_values.reset()
-        if draft_past_key_values is not None:
-            draft_past_key_values.reset()
+        reset_kv(past_key_values, draft_past_key_values)
     generator.profiling = original_profiling
 
     # 2. Main evaluation loop
@@ -132,9 +131,7 @@ def run_gsm8k_eval(generator, tokenizer, past_key_values, draft_past_key_values,
                 draft_past_key_values=draft_past_key_values
             )
 
-        past_key_values.reset()
-        if draft_past_key_values is not None:
-            draft_past_key_values.reset()
+        reset_kv(past_key_values, draft_past_key_values)
 
         # 2.2 Extract original performance logs
         record = {**wandb_logger.log_data}
@@ -265,9 +262,7 @@ def run_aime_eval(generator, tokenizer,
                 draft_past_key_values=draft_past_key_values
             )
 
-        past_key_values.reset()
-        if draft_past_key_values is not None:
-            draft_past_key_values.reset()
+        reset_kv(past_key_values, draft_past_key_values)
     generator.profiling = original_profiling
 
     # 2. Main loop
@@ -301,9 +296,7 @@ def run_aime_eval(generator, tokenizer,
                 past_key_values=past_key_values,
                 draft_past_key_values=draft_past_key_values
             )
-        past_key_values.reset()
-        if draft_past_key_values is not None:
-            draft_past_key_values.reset()
+        reset_kv(past_key_values, draft_past_key_values)
 
         response = tokenizer.decode(
             output_ids[0, input_ids.shape[1]:], skip_special_tokens=True
@@ -400,8 +393,7 @@ def run_mmlu_pro_eval(generator, tokenizer,
                 past_key_values=past_key_values,
                 draft_past_key_values=draft_past_key_values
             )
-        past_key_values.reset()
-        if draft_past_key_values: draft_past_key_values.reset()
+        reset_kv(past_key_values, draft_past_key_values)
     generator.profiling = orig_prof
 
     # 2. Main loop
@@ -430,8 +422,7 @@ def run_mmlu_pro_eval(generator, tokenizer,
                 past_key_values=past_key_values,
                 draft_past_key_values=draft_past_key_values
             )
-        past_key_values.reset()
-        if draft_past_key_values: draft_past_key_values.reset()
+        reset_kv(past_key_values, draft_past_key_values)
 
         resp = tokenizer.decode(
             output_ids[0, input_ids.shape[1]:],
@@ -651,7 +642,6 @@ def run_livecodebench_eval(
 
         for s in range(n_samples):
             start = time.time()
-            # ... (Your generator.generate call remains the same) ...
             with sdpa_kernel(backends=[SDPBackend.MATH]):
                 output_ids = generator.generate(
                     input_ids,
@@ -663,17 +653,13 @@ def run_livecodebench_eval(
                 )
             gen_time = time.time() - start
 
-            past_key_values.reset()
-            if draft_past_key_values is not None:
-                draft_past_key_values.reset()
+            reset_kv(past_key_values, draft_past_key_values)
 
             response = tokenizer.decode(
                 output_ids[0][input_ids.shape[1]:], skip_special_tokens=True
             ).strip()
             responses.append(response)
 
-            # !!! KEY CHANGE: Replace all grading logic with one function call !!!
-            # The 'problem' dict contains all necessary info (tests, etc.)
             result = check_correctness(problem=problem, completion=response, timeout=test_timeout)
             graded_list.append(result["passed"])
             
@@ -681,7 +667,6 @@ def run_livecodebench_eval(
 
         pass1 = int(graded_list[0] if graded_list else 0)
         
-        # ... (Your logging and metric accumulation code remains the same) ...
         record = {
             **wandb_logger.log_data,
             "query": prompt,
@@ -696,14 +681,6 @@ def run_livecodebench_eval(
             "peak_memory": torch.cuda.max_memory_reserved(generator.device) / (1024 ** 3)
         }
 
-        # ... (Your metric aggregation and file writing remains the same) ...
-        # ...
-
-    # === 3) Summaries (No changes needed here) ===
-    # ... (Your summary printing code remains the same) ...
-    # ...
-
-    # The function signature expects you to return these values
     tput_mean, tput_std = (np.mean(tput_list), np.std(tput_list)) if tput_list else (0, 0)
     tacc_mean, tacc_std = (np.mean(tacc_list), np.std(tacc_list)) if tacc_list else (0, 0)
     avg_draft_time = np.mean(draft_times) if draft_times else 0
@@ -786,16 +763,11 @@ def run_longbench_eval(generator, tokenizer, past_key_values, draft_past_key_val
                 draft_past_key_values=draft_past_key_values
             )
 
-        past_key_values.reset()
-        if draft_past_key_values is not None:
-            draft_past_key_values.reset()
+        reset_kv(past_key_values, draft_past_key_values)
     generator.profiling = original_profiling
 
-    # capture cuda-graph
-    if hasattr(generator, 'init_cuda_graph_runner') and callable(generator.init_cuda_graph_runner):
-        print("Generator has init_cuda_graph_runner. Initializing CUDA Graph runner...")
-        generator.init_cuda_graph_runner(args.device)
-        past_key_values.reset()
+    # Optional CUDA-graph capture for FlashInfer, after warmup (stabilizes kernels/allocations).
+    maybe_init_cuda_graph_runner(generator, past_key_values, draft_past_key_values, args.device, args.warmup_iter)
         
     # 2. Main evaluation loop
     log_file = os.path.join(log_dir, "0.jsonl")
@@ -861,9 +833,7 @@ def run_longbench_eval(generator, tokenizer, past_key_values, draft_past_key_val
                 draft_past_key_values=draft_past_key_values
             )
 
-        past_key_values.reset()
-        if draft_past_key_values is not None:
-            draft_past_key_values.reset()
+        reset_kv(past_key_values, draft_past_key_values)
 
         # 2.2 Extract original performance logs
         record = {**generator.exp_log}

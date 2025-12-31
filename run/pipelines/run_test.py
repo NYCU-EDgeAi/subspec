@@ -5,6 +5,7 @@ import logging
 import os
 import nvtx
 import random
+from run.pipelines.utils.eval_utils import reset_kv, maybe_init_cuda_graph_runner
 
 def main(builder):
     generator, tokenizer, past_kv, draft_past_kv = builder.build()
@@ -34,15 +35,11 @@ def main(builder):
                     with sdpa_kernel(backends=[SDPBackend.MATH]):
                         generator.generate(input_ids, temperature=args.temperature, max_length=args.max_length, do_sample=args.do_sample, past_key_values=past_kv, draft_past_key_values=draft_past_kv)
                 
-                past_kv.reset()
-                if draft_past_kv is not None:
-                    draft_past_kv.reset()
+                reset_kv(past_kv, draft_past_kv)
             generator.profiling = is_profiling
-    # capture cuda-graph
-    if hasattr(generator, 'init_cuda_graph_runner') and callable(generator.init_cuda_graph_runner) and args.warmup_iter > 0:
-        print("Generator has init_cuda_graph_runner. Initializing CUDA Graph runner...")
-        generator.init_cuda_graph_runner(args.device)
-        past_kv.reset()
+
+    # Optional CUDA-graph capture for FlashInfer, after warmup (stabilizes kernels/allocations).
+    maybe_init_cuda_graph_runner(generator, past_kv, draft_past_kv, args.device, args.warmup_iter)
         
     # input message
     input_message = "Do you know what is Beyblade? What is the best strategy to build the strongest Beyblade?"
