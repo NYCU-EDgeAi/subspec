@@ -242,10 +242,7 @@ class Tree:
             probs.append(node.cumulative_probability)
             depths.append(node.depth)
             parents.append(node.parent if node.parent is not None else -1)
-            
-        # print("Skip nodes:", skip_nodes)
-        # print("\tBefore skip nodes:", t_ids)
-        # print("\tAfter skip nodes:", t_ids[skip_nodes:])
+
         return {
             'token_ids': torch.tensor(t_ids[skip_nodes:], dtype=torch.long, device='cpu'),
             'cumulative_probabilities': torch.tensor(probs[skip_nodes:], dtype=self.prob_dtype, device='cpu'),
@@ -280,9 +277,7 @@ class Tree:
         am_tensor = torch.tensor(ancestor_matrix, dtype=torch.bool, device=device)
         if prefix_length > 0:
             prefix = torch.ones((n, prefix_length), dtype=torch.bool, device=device)
-            # print("prefix mask shape:", prefix.shape, "am_tensor shape:", am_tensor.shape)
             am_tensor = torch.cat([prefix, am_tensor], dim=1)
-            # print("whole_am_tensor shape:", am_tensor.shape)
 
         # Convert to large negative for masking
         # neg_inf_mask = (~am_tensor).to(self.prob_dtype) * torch.finfo(self.prob_dtype).min

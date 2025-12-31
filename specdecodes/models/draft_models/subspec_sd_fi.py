@@ -179,10 +179,10 @@ class SubSpecSDDraftModel(DraftModelBase):
     
     @torch.no_grad()
     def update_tree(self, tree_data):
-        with nvtx.annotate("tree related"):
-            with nvtx.annotate("get tree data"):
+        with nvtx.annotate("tree_finalize"):
+            with nvtx.annotate("tree_data/get"):
                 data = tree_data.get_data()
-            with nvtx.annotate("update tree"):
+            with nvtx.annotate("tree/apply"):
                 self.tree.add_nodes(*data)
         return self.tree
     
@@ -210,7 +210,7 @@ class SubSpecSDDraftModel(DraftModelBase):
 
         
         # 2) Initialize kv_len & cache_position
-        with nvtx.annotate("Initialize kv_len & cache_position"):
+        with nvtx.annotate("kv_init"):
             kv_len = request_kv_cache.get_seq_length()
             # convert kv_len to int if it is a tensor
             if isinstance(kv_len, torch.Tensor):
@@ -218,7 +218,7 @@ class SubSpecSDDraftModel(DraftModelBase):
             org_kv_len = kv_len
 
         # 3) First forward pass
-        with nvtx.annotate("ssm first forward", color="red"):
+        with nvtx.annotate("draft_prefill", color="red"):
             
             mode = "decode"
             request_kv_cache.increment() 
@@ -252,7 +252,7 @@ class SubSpecSDDraftModel(DraftModelBase):
             kv_len += input_len
             
 
-        with nvtx.annotate("update parent_probs & position_ids"):
+        with nvtx.annotate("draft_init_state"):
             parent_probs = torch.ones((1, 1), device=device, dtype=dtype)
             position_ids = torch.full((batch_size, self.draft_params.topk_len), kv_len, device=device, dtype=torch.long)
         
@@ -270,7 +270,7 @@ class SubSpecSDDraftModel(DraftModelBase):
 
         # 5) Main loop
         for depth_i in range(self.draft_params.max_depth):
-            with nvtx.annotate("sample nodes", color="green"):
+            with nvtx.annotate("draft_sample", color="green"):
                 token_ids, child_probs, parent_indices = self.topk_sampling(
                     sampled_probs,
                     parent_probs,
@@ -279,13 +279,13 @@ class SubSpecSDDraftModel(DraftModelBase):
                 
                 parent_probs = child_probs
                 
-            with nvtx.annotate("add nodes", color="green"):
+            with nvtx.annotate("tree_data/update", color="green"):
                 self.tree_data.update(token_ids, child_probs, parent_indices)
                 
-            with nvtx.annotate("tree mask"):
+            with nvtx.annotate("tree_mask/update"):
                 tree_attention_mask = self.tree_mask_cache.update_tree_mask(parent_indices,return_invert=False)
                 
-            with nvtx.annotate("ssm forward", color="red"):
+            with nvtx.annotate("draft_forward", color="red"):
                 num_tokens = self.draft_params.topk_len
                 request_kv_cache.increment(num_tokens)
 
@@ -324,7 +324,7 @@ class SubSpecSDDraftModel(DraftModelBase):
                     )
                 kv_len += self.draft_params.topk_len
                 
-            with nvtx.annotate("update position_ids & cache"):
+            with nvtx.annotate("state_update"):
                 position_ids += 1
 
         request_kv_cache.decrement(kv_len - org_kv_len)
@@ -342,15 +342,12 @@ class SubSpecSDDraftModel(DraftModelBase):
     @torch.no_grad()
     def postspec(self):
         if not self.had_first_speculate:
-                #print("Post speculate before first speculate, skip.")
-                pass
-        elif self.postspec_count >(self.post_draft_params.max_depth - 1):
-                #print("Post speculate reached max depth, skip.")
-                pass
-        else:
-            with nvtx.annotate("post_speculate_once", color="blue"):
-                self.speculate_once()
-            self.postspec_count += 1
+            return
+        if self.postspec_count > (self.post_draft_params.max_depth - 1):
+            return
+        with nvtx.annotate("postspec_step", color="blue"):
+            self.speculate_once()
+        self.postspec_count += 1
 
     @torch.no_grad()
     def speculate_once(self, **kwargs):
@@ -361,7 +358,7 @@ class SubSpecSDDraftModel(DraftModelBase):
 
         request_kv_cache = self.request_kv_cache
         
-        with nvtx.annotate("ssm forward", color="red"):
+        with nvtx.annotate("draft_forward", color="red"):
             num_tokens = self.draft_params.topk_len
             
             request_kv_cache.increment(num_tokens)
@@ -400,7 +397,7 @@ class SubSpecSDDraftModel(DraftModelBase):
                     flashinferWrapper=self.flashinferWrapper,
                 )
 
-        with nvtx.annotate("sample nodes", color="green"):
+        with nvtx.annotate("draft_sample", color="green"):
             token_ids, child_probs, parent_indices = self.topk_sampling(
                 sampled_probs,
                 parent_probs,
@@ -408,7 +405,7 @@ class SubSpecSDDraftModel(DraftModelBase):
             )
             parent_probs = child_probs
             
-        with nvtx.annotate("update tree_data & tree_mask", color="green"):
+        with nvtx.annotate("tree_update", color="green"):
             self.tree_data.update(token_ids, child_probs, parent_indices)
             self.tree_mask_cache.update_tree_mask(parent_indices)
             
@@ -419,9 +416,7 @@ class SubSpecSDDraftModel(DraftModelBase):
 
 
     def update_tree_after_post(self):
-        """
-        Get the tree structure 
-        """
+        """Return the finalized draft tree after post-speculation."""
         # Update the tree data and mask cache before returning
         self.update_tree(self.tree_data)
         return self.tree

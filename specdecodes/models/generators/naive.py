@@ -12,7 +12,7 @@ class NaiveGeneratorBase(GeneratorBase):
     def __init__(self, generator_kwargs, *model_args, **kwargs):
         super().__init__(*model_args, **kwargs)
         self.prefill_chunk_size = generator_kwargs.get("prefill_chunk_size", None)
-        print(f"prefill_chunk_size: {self.prefill_chunk_size}")
+        logging.debug("prefill_chunk_size: %s", self.prefill_chunk_size)
 
     def _generate(
         self,
@@ -48,53 +48,29 @@ class NaiveGeneratorBase(GeneratorBase):
         cache_position = torch.arange(kv_len, input_len, dtype=torch.long, device=input_ids.device)
 
         # Prefill stage
-        with nvtx.annotate("prefill", color="orange"):
-            current_kv_len = past_key_values.get_seq_length()
-            prefill_tokens = input_ids[:, current_kv_len:]
-            prefill_length = prefill_tokens.size(1)
-            chunk_size = prefill_length if self.prefill_chunk_size is None else min(prefill_length, self.prefill_chunk_size)
-            next_token_logits = None
-            for start in range(0, prefill_length, chunk_size):
-                chunk = prefill_tokens[:, start:start + chunk_size]
-                current_kv_len = past_key_values.get_seq_length()
-                cache_position = torch.arange(
-                    current_kv_len, current_kv_len + chunk.size(1),
-                    dtype=torch.long, device=input_ids.device
-                )
-                # last iteration
-                if start + chunk_size < prefill_length:
-                    # does not need output logits, just update kv-cache
-                    self.target_model.model(
-                        chunk,
-                        past_key_values=past_key_values.cache,
-                        position_ids=cache_position.unsqueeze(0),
-                        cache_position=cache_position,
-                    )
-                else:
-                    outputs = self.target_model.prefill_forward(
-                        chunk,
-                        past_key_values=past_key_values.cache,
-                        position_ids=cache_position.unsqueeze(0),
-                        cache_position=cache_position,
-                        logits_to_keep=1,
-                    )
-                    next_token_logits = outputs.logits
-                    del outputs
-                past_key_values.seq_len += chunk.size(1)
+        with nvtx.annotate("prefill_chunked", color="orange"):
+            outputs = self._chunked_prefill_forward(
+                input_ids,
+                past_key_values,
+                prefill_chunk_size=self.prefill_chunk_size,
+                use_position_ids=True,
+            )
+            next_token_logits = outputs.logits
+            del outputs
 
-        with nvtx.annotate("sample tokens"):
+        with nvtx.annotate("sample"):
             next_tokens = self._sample_token(next_token_logits, logits_processor, do_sample)
 
-        with nvtx.annotate("update data"):
+        with nvtx.annotate("state_update"):
             input_ids = torch.cat([input_ids, next_tokens], dim=-1)
             cache_position = cache_position[-1:] + 1
             self._maybe_stream(stream_callback, next_tokens)
 
         # Decoding loop
-        with nvtx.annotate("decoding"):
+        with nvtx.annotate("decode_loop"):
             finished = False
             while not finished:
-                with nvtx.annotate("llm forward", color="orange"):
+                with nvtx.annotate("target_forward", color="red"):
                     outputs = self.target_model(
                         next_tokens,
                         past_key_values=past_key_values.cache,
@@ -103,16 +79,16 @@ class NaiveGeneratorBase(GeneratorBase):
                     )
                     next_token_logits = outputs.logits
 
-                with nvtx.annotate("sample tokens"):
+                with nvtx.annotate("sample"):
                     next_tokens = self._sample_token(next_token_logits, logits_processor, do_sample)
 
-                with nvtx.annotate("update data"):
+                with nvtx.annotate("state_update"):
                     input_ids = torch.cat([input_ids, next_tokens], dim=-1)
                     cache_position += 1
                     past_key_values.seq_len += 1
                     self._maybe_stream(stream_callback, next_tokens)
 
-                with nvtx.annotate("stopping criteria"):
+                with nvtx.annotate("stop_check"):
                     finished = stopping_criteria(input_ids, None)
 
         return input_ids

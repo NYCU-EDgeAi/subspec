@@ -57,15 +57,12 @@ class SubSpecSDDraftModel(ClassicSDDraftModel):
         depth = depth if depth is not None else self.draft_params.max_depth
 
         # 2) Initialize kv_len & cache_position
-        with nvtx.annotate("Initialize kv_len & cache_position"):
-            kv_len = self.past_key_values.get_seq_length()
-            # convert kv_len to int if it is a tensor
-            if isinstance(kv_len, torch.Tensor):
-                kv_len = kv_len.item()
+        with nvtx.annotate("kv_init"):
+            kv_len = self._get_kv_len_int()
 
         # 3) First forward pass
-        cache_position = torch.arange(kv_len, kv_len+input_len, dtype=torch.long, device=device)
-        with nvtx.annotate("ssm first forward", color="red"):
+        with nvtx.annotate("draft_prefill", color="red"):
+            cache_position = torch.arange(kv_len, kv_len + input_len, dtype=torch.long, device=device)
             sampled_probs = self(
                 input_ids,
                 with_softmax=True,
@@ -76,10 +73,10 @@ class SubSpecSDDraftModel(ClassicSDDraftModel):
             )
             kv_len += input_len
 
-        with nvtx.annotate("sample nodes", color="green"):
+        with nvtx.annotate("draft_sample", color="green"):
             sampled_token = torch.argmax(sampled_probs[:, -1:], dim=-1)
                                 
-        # 4) Initialize TreeData & TreeMaskCache to manage tree structure and intermediate data.
+        # 4) Initialize sequential draft state (token buffer + cache position).
         self.token_ids = []
         self.token_ids.append(input_ids[:, -1:])
         self.token_ids.append(sampled_token)
@@ -88,7 +85,7 @@ class SubSpecSDDraftModel(ClassicSDDraftModel):
         if wandb_logger.get_flag("detailed_analysis", False):
             self.draft_prob = [torch.max(sampled_probs[:, -1:]).cpu().item()]
 
-        # 6) Main loop
+        # 5) Main loop
         for depth_i in range(depth-1):
             self.speculate_once()
 
@@ -100,20 +97,15 @@ class SubSpecSDDraftModel(ClassicSDDraftModel):
     @torch.no_grad()
     def postspec(self):
         if not self.had_first_speculate:
-                #print("Post speculate before first speculate, skip.")
-                pass
-        elif self.postspec_count > (self.draft_params.max_depth - 1):
-                #print("Post speculate reached max depth, skip.")
-                pass
-        else:
-            with nvtx.annotate("post_speculate_once", color="blue"):
-                self.speculate_once()
-            self.postspec_count += 1
+            return
+        if self.postspec_count > (self.draft_params.max_depth - 1):
+            return
+        with nvtx.annotate("postspec_step", color="blue"):
+            self.speculate_once()
+        self.postspec_count += 1
     
     def update_tree_after_post(self):
-        """
-        Get the tree structure 
-        """
+        """Return newly post-speculated tokens since the first speculation."""
         # Update the tree data and mask cache before returning
         token_ids = torch.cat(self.token_ids, dim=-1)
         new_token_ids = token_ids[:, -self.postspec_count:]

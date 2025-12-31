@@ -122,11 +122,6 @@ class FlashinferAttentionWrapper:
         dtype: torch.dtype,
         attention_mask: Optional[torch.Tensor] = None,
     ):
-        # print(f'seq_indptr : {batch_position.seq_indptr}')
-        # print(f'kv_page_indptr : {batch_position.kv_page_indptr}')
-        # print(f'kv_page_indices : {batch_position.kv_page_indices}')
-        # print(f'kv_last_page_len : {batch_position.kv_last_page_len}\n\n')
-
         if mode == "tree" and attention_mask is not None:
             self.tree_wrapper.begin_forward(
                     batch_position.seq_indptr,

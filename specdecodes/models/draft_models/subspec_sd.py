@@ -58,15 +58,12 @@ class SubSpecSDDraftModel(ClassicSDDraftModel):
         assert input_len == 1, "Value of input_len should be 1, as this is the root node of the tree."
 
         # 2) Initialize kv_len & cache_position
-        with nvtx.annotate("Initialize kv_len & cache_position"):
-            kv_len = self.past_key_values.get_seq_length()
-            # convert kv_len to int if it is a tensor
-            if isinstance(kv_len, torch.Tensor):
-                kv_len = kv_len.item()
+        with nvtx.annotate("kv_init"):
+            kv_len = self._get_kv_len_int()
 
         # 3) First forward pass
-        cache_position = torch.arange(kv_len, kv_len+input_len, dtype=torch.long, device=device)
-        with nvtx.annotate("ssm first forward", color="red"):
+        with nvtx.annotate("draft_prefill", color="red"):
+            cache_position = torch.arange(kv_len, kv_len + input_len, dtype=torch.long, device=device)
             sampled_probs = self(
                 input_ids,
                 with_softmax=True,
@@ -77,7 +74,7 @@ class SubSpecSDDraftModel(ClassicSDDraftModel):
             )
             kv_len += input_len
 
-        with nvtx.annotate("sample nodes", color="green"):
+        with nvtx.annotate("draft_sample", color="green"):
             self.parent_probs = torch.ones((1, 1), device=device, dtype=dtype)
             token_ids, child_probs, parent_indices = self.topk_sampling(
                 sampled_probs,
@@ -102,7 +99,7 @@ class SubSpecSDDraftModel(ClassicSDDraftModel):
             self.draft_prob = [torch.max(sampled_probs[:, -1:]).cpu().item()]
 
         # 5) First update of tree_data and tree_mask_cache
-        with nvtx.annotate("update tree_data & tree_mask", color="green"):
+        with nvtx.annotate("tree_update", color="green"):
             self.tree_data.update(token_ids, child_probs, parent_indices)
             self.tree_mask_cache.update_tree_mask(parent_indices)
         
@@ -126,20 +123,15 @@ class SubSpecSDDraftModel(ClassicSDDraftModel):
     @torch.no_grad()
     def postspec(self):
         if not self.had_first_speculate:
-                #print("Post speculate before first speculate, skip.")
-                pass
-        elif self.postspec_count > (self.draft_params.max_depth - 1):
-                #print("Post speculate reached max depth, skip.")
-                pass
-        else:
-            with nvtx.annotate("post_speculate_once", color="blue"):
-                self.speculate_once()
-            self.postspec_count += 1
+            return
+        if self.postspec_count > (self.draft_params.max_depth - 1):
+            return
+        with nvtx.annotate("postspec_step", color="blue"):
+            self.speculate_once()
+        self.postspec_count += 1
     
     def update_tree_after_post(self):
-        """
-        Get the tree structure 
-        """
+        """Return the finalized draft tree after post-speculation."""
         # Update the tree data and mask cache before returning
         self.update_tree(self.tree_data)
         return self.tree

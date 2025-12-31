@@ -23,15 +23,12 @@ class ClassicSDDraftModel(DraftModelBase):
         assert batch_size == 1, "Only support batch_size=1 for now."
         
         # 2) Initialize kv_len & cache_position
-        with nvtx.annotate("Initialize kv_len & cache_position"):
-            kv_len = self.past_key_values.get_seq_length()
-            # convert kv_len to int if it is a tensor
-            if isinstance(kv_len, torch.Tensor):
-                kv_len = kv_len.item()
+        with nvtx.annotate("kv_init"):
+            kv_len = self._get_kv_len_int()
             
         # 3) First forward pass
-        cache_position = torch.arange(kv_len, input_len, dtype=torch.long, device=device)
-        with nvtx.annotate("ssm first forward", color="red"):
+        with nvtx.annotate("draft_prefill", color="red"):
+            cache_position = torch.arange(kv_len, input_len, dtype=torch.long, device=device)
             sampled_probs = self.prefill_forward(
                 input_ids[:, kv_len:],
                 with_softmax=True,
@@ -43,16 +40,16 @@ class ClassicSDDraftModel(DraftModelBase):
             kv_len = input_len
             self.past_key_values.seq_len = input_len
             
-        with nvtx.annotate("sample nodes", color="green"): #torch.argmax(logits, dim=-1)
+        with nvtx.annotate("draft_sample", color="green"):
             sampled_token = torch.argmax(sampled_probs[:, -1:], dim=-1)
         
-        # 4) Initialize TreeData & TreeMaskCache to manage tree structure and intermediate data. 
+        # 4) Initialize sequential draft state (token buffer + cache position).
         self.token_ids = []
         self.token_ids.append(input_ids[:, -1:])
         self.token_ids.append(sampled_token)
         self.cache_position = torch.arange(kv_len, kv_len+self.draft_params.topk_len, dtype=torch.long, device=device)
         
-        # 6) Main loop
+        # 5) Main loop
         for depth_i in range(self.draft_params.max_depth-1):
             self.speculate_once()
         
@@ -63,7 +60,7 @@ class ClassicSDDraftModel(DraftModelBase):
         token_ids = self.token_ids
         cache_position = self.cache_position
 
-        with nvtx.annotate("ssm forward", color="red"):
+        with nvtx.annotate("draft_forward", color="red"):
             sampled_probs = self(
                 token_ids[-1], 
                 with_softmax=True,
@@ -71,7 +68,7 @@ class ClassicSDDraftModel(DraftModelBase):
                 cache_position=cache_position,
                 past_key_values=self.past_key_values.cache,
             )
-        with nvtx.annotate("sample nodes", color="green"):
+        with nvtx.annotate("draft_sample", color="green"):
             sampled_token = torch.argmax(sampled_probs[:, -1, :], dim=-1, keepdim=True)
             token_ids.append(sampled_token)
             

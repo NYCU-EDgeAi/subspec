@@ -1,7 +1,6 @@
 import torch
 from transformers.generation.logits_process import LogitsProcessorList
 from transformers.generation.stopping_criteria import StoppingCriteria
-import logging
 import nvtx
 
 from .classic_sd import ClassicSDGeneratorBase
@@ -16,24 +15,17 @@ class SubSpecSDGeneratorBase(ClassicSDGeneratorBase):
         do_sample: bool,
         **model_kwargs,
     ):
-        """
-        Generate sequence of tokens with speculative decoding.
+        """Generate a token sequence with speculative decoding.
 
-        This method consists of two main stages: prefill and decode.
-
-        Prefill Stage:
-        - Perform the model's initial forward pass.
-        - Sample a token and append it to the input_ids.
-
-        Decode Stage (with speculative decoding):
-        - Iterate through the following steps:
-            1. Perform SSM speculative sampling, returns sampled tokens in tree form.
-            2. Decode the sampled tokens in parallel with the language model (LLM), generating probabilities for each token.
-            3. Verify the sampled tokens by accepting or rejecting them, corresponding to the probabilities.
-            4. Update the key-value cache and input_ids accordingly.
+        Stages:
+        - Prefill: run the target model on the prompt, then sample the next token.
+        - Decode loop:
+            1) Draft proposes candidate tokens (tree form).
+            2) Target scores candidates in one forward.
+            3) Verify and accept a prefix, then update KV/state.
 
         Args:
-            input_ids (torch.LongTensor): The input token IDs. 
+            input_ids (torch.LongTensor): The input token IDs.
             stopping_criteria (StoppingCriteria): The criteria to stop the generation.
             logits_processor (LogitsProcessor): The processor to modify the logits.
             do_sample (bool): Whether to sample tokens during generation. If False, the generation will be deterministic.
@@ -69,54 +61,28 @@ class SubSpecSDGeneratorBase(ClassicSDGeneratorBase):
         stream_callback = model_kwargs.get("stream_callback", None)
 
         # * prefill stage
-        with nvtx.annotate("chunked prefill", color="orange"):
+        with nvtx.annotate("prefill_chunked", color="orange"):
             self._init_tree_mask(
                 self.draft_params.max_verify_tokens, max_cache_len, device=input_ids.device
             )
-            current_kv_len = past_key_values.get_seq_length()
-            prefill_tokens = input_ids[:, current_kv_len:]
-            prefill_length = prefill_tokens.size(1)
-            chunk_size = prefill_length if self.prefill_chunk_size is None else min(prefill_length, self.prefill_chunk_size)
-            next_token_logits = None
-            for start in range(0, prefill_length, chunk_size):
-                chunk = prefill_tokens[:, start:start + chunk_size]
-                current_kv_len = past_key_values.get_seq_length()
-                cache_position = torch.arange(
-                    current_kv_len, current_kv_len + chunk.size(1),
-                    dtype=torch.long, device=input_ids.device
-                )
-                # last iteration
-                if start + chunk_size < prefill_length:
-                    self.target_model.model(
-                        chunk,
-                        past_key_values=past_key_values.cache,
-                        position_ids=cache_position.unsqueeze(0),
-                        cache_position=cache_position,
-                    )
-                else:
-                    outputs = self.target_model.prefill_forward(
-                        chunk,
-                        past_key_values=past_key_values.cache,
-                        position_ids=cache_position.unsqueeze(0),
-                        cache_position=cache_position,
-                        logits_to_keep=1,
-                    )
-                    next_token_logits = outputs.logits
-                    del outputs
-                
-                past_key_values.seq_len += chunk.size(1)
+            outputs = self._chunked_prefill_forward(
+                input_ids,
+                past_key_values,
+                prefill_chunk_size=self.prefill_chunk_size,
+                use_position_ids=True,
+            )
+            next_token_logits = outputs.logits
+            del outputs
 
-        with nvtx.annotate("sample tokens"):
+        with nvtx.annotate("sample"):
             sampled_tokens = self._sample_token(next_token_logits, logits_processor, do_sample)
-            #print(f"After prefill, sampled token: {self.tokenizer.decode(sampled_tokens[0])}")
-            #return "end"
 
-        with nvtx.annotate("update data"):
+        with nvtx.annotate("state_update"):
             input_ids = torch.cat([input_ids, sampled_tokens], dim=-1)
             cache_position = torch.arange(org_input_len, org_input_len+self.draft_params.max_verify_tokens, dtype=torch.long, device=input_ids.device)
             self._maybe_stream(stream_callback, sampled_tokens)
 
-        with nvtx.annotate("decoding"):
+        with nvtx.annotate("decode_loop"):
             finished = False
             while not finished:
                 # * speculate
@@ -125,7 +91,7 @@ class SubSpecSDGeneratorBase(ClassicSDGeneratorBase):
                     tree = self._speculate(last_token_id)
 
                 # * tree decoding
-                with nvtx.annotate("tree_decoding", color="orange"):
+                with nvtx.annotate("target_decode", color="orange"):
                     prev_kv_len = past_key_values.get_seq_length()
                     if self.cache_implementation == 'dynamic':
                         past_key_values.crop(prev_kv_len)
@@ -145,25 +111,21 @@ class SubSpecSDGeneratorBase(ClassicSDGeneratorBase):
                     del next_token_logits
                     
                 # * update input_ids and cache_position
-                with nvtx.annotate("update data"):
+                with nvtx.annotate("state_update"):
                     input_ids = torch.cat([input_ids, sampled_tokens], dim=-1)
                     cache_position += sampled_tokens.shape[1]
                 
                 # * check stopping criteria
-                with nvtx.annotate("stopping criteria"):
-                    prune_tokens = 0
-                    for k in range(sampled_tokens.shape[1]):    
-                        finished = stopping_criteria(sampled_tokens[:, k:k+1], None).item()
-                        if finished:
-                            prune_tokens = sampled_tokens.shape[1]-k-1
-                            input_ids = input_ids[:, :-prune_tokens] if prune_tokens > 0 else input_ids
-                            break
-
-                kept = sampled_tokens if prune_tokens == 0 else sampled_tokens[:, : sampled_tokens.shape[1] - prune_tokens]
+                with nvtx.annotate("stop_check"):
+                    finished, input_ids, kept, prune_tokens = self._apply_tokenwise_stopping_criteria(
+                        input_ids=input_ids,
+                        sampled_tokens=sampled_tokens,
+                        stopping_criteria=stopping_criteria,
+                    )
                 if kept.numel() > 0:
                     self._maybe_stream(stream_callback, kept)
                 
-                with nvtx.annotate("reorder kv"):
+                with nvtx.annotate("kv_reorder"):
                     past_key_values.reorder_cache_with_offset(hidden_indices, offset=prev_kv_len, new_chunk_len=self.draft_params.max_verify_tokens, dim=2)
                     past_key_values.seq_len += hidden_indices.shape[0]
                     if finished:

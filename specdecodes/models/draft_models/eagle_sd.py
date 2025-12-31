@@ -83,15 +83,12 @@ class EagleSDDraftModel(ClassicSDDraftModel):
         assert batch_size == 1, "Only support batch_size=1 for now."
         
         # 2) Initialize kv_len & cache_position
-        with nvtx.annotate("Initialize kv_len & cache_position"):
-            kv_len = self.past_key_values.get_seq_length()
-            # convert kv_len to int if it is a tensor
-            if isinstance(kv_len, torch.Tensor):
-                kv_len = kv_len.item()
+        with nvtx.annotate("kv_init"):
+            kv_len = self._get_kv_len_int()
             
-        # 5) First forward pass
-        cache_position = torch.arange(kv_len, input_len, dtype=torch.long, device=device)
-        with nvtx.annotate("ssm first forward", color="red"):
+        # 3) First forward pass (prefill)
+        with nvtx.annotate("draft_prefill", color="red"):
+            cache_position = torch.arange(kv_len, input_len, dtype=torch.long, device=device)
             sampled_probs, hidden_states = self.prefill_forward(
                 input_ids[:, kv_len:],
                 hidden_states=hidden_states,
@@ -104,7 +101,8 @@ class EagleSDDraftModel(ClassicSDDraftModel):
             kv_len = input_len
             self.past_key_values.seq_len = input_len
             
-        with nvtx.annotate("sample nodes", color="green"):
+        # 4) Sample nodes
+        with nvtx.annotate("draft_sample", color="green"):
             self.parent_probs = torch.ones((1, 1), device=device, dtype=dtype)
             token_ids, child_probs, parent_indices = self.topk_sampling(
                 sampled_probs,
@@ -113,12 +111,12 @@ class EagleSDDraftModel(ClassicSDDraftModel):
             )
             self.parent_probs = child_probs
             
-        with nvtx.annotate("filter"):
+        with nvtx.annotate("hidden_filter"):
             # Expand parent_indices to match hidden_states along the last dimension
             parent_indices_expanded = parent_indices.unsqueeze(-1).expand(-1, -1, hidden_states.size(-1))
             hidden_states = torch.gather(hidden_states, dim=1, index=parent_indices_expanded)
         
-        # 4) Initialize TreeData & TreeMaskCache to manage tree structure and intermediate data.
+        # 5) Initialize TreeData & TreeMaskCache for tree-structured speculation.
         root_id = input_ids[0, -1]
         self.tree = Tree(root_id, dtype)
         self.tree_data = TreeData()
@@ -130,8 +128,8 @@ class EagleSDDraftModel(ClassicSDDraftModel):
             device=device,
         )
         
-        # 5) First update of tree_data and tree_mask_cache
-        with nvtx.annotate("update tree_data & tree_mask", color="green"):
+        # 6) First update of tree_data and tree_mask_cache
+        with nvtx.annotate("tree_update", color="green"):
             self.tree_data.update(token_ids, child_probs, parent_indices)
             self.tree_mask_cache.update_tree_mask(parent_indices)
         
@@ -158,7 +156,7 @@ class EagleSDDraftModel(ClassicSDDraftModel):
         position_ids = self.position_ids
         cache_position = self.cache_position
         
-        with nvtx.annotate("ssm forward", color="red"):
+        with nvtx.annotate("draft_forward", color="red"):
             sampled_probs, hidden_states = self(
                 token_ids,
                 hidden_states=hidden_states,
@@ -169,7 +167,7 @@ class EagleSDDraftModel(ClassicSDDraftModel):
                 cache_position=cache_position,
             )
         
-        with nvtx.annotate("sample nodes", color="green"):
+        with nvtx.annotate("draft_sample", color="green"):
             token_ids, child_probs, parent_indices = self.topk_sampling(
                 sampled_probs,
                 parent_probs,
@@ -177,12 +175,12 @@ class EagleSDDraftModel(ClassicSDDraftModel):
             )
             parent_probs = child_probs
             
-        with nvtx.annotate("filter"):
+        with nvtx.annotate("hidden_filter"):
             # Expand parent_indices to match hidden_states along the last dimension
             parent_indices_expanded = parent_indices.unsqueeze(-1).expand(-1, -1, hidden_states.size(-1))
             hidden_states = torch.gather(hidden_states, dim=1, index=parent_indices_expanded)
             
-        with nvtx.annotate("update tree_data & tree_mask", color="green"):
+        with nvtx.annotate("tree_update", color="green"):
             self.tree_data.update(token_ids, child_probs, parent_indices)
             self.tree_mask_cache.update_tree_mask(parent_indices)
             

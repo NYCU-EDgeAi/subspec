@@ -1,6 +1,7 @@
 import logging
 import torch
 import torch.nn as nn
+from typing import Any
 from transformers.generation.logits_process import LogitsProcessor, LogitsProcessorList, TemperatureLogitsWarper, TopKLogitsWarper, TopPLogitsWarper, LogitNormalization
 from transformers.generation.stopping_criteria import StoppingCriteria, StoppingCriteriaList, MaxLengthCriteria, MaxTimeCriteria, EosTokenCriteria, StopStringCriteria
 from specdecodes.models.utils.cache_utils import TreeDynamicCache, TreeStaticCache
@@ -199,6 +200,97 @@ class GeneratorBase(nn.Module):
         if stream_callback is None:
             return
         stream_callback(token_ids)
+
+    def _chunked_prefill_forward(
+        self,
+        input_ids: torch.LongTensor,
+        past_key_values: Any,
+        *,
+        prefill_chunk_size: int | None,
+        use_position_ids: bool = True,
+        model_forward_kwargs: dict[str, Any] | None = None,
+        prefill_forward_kwargs: dict[str, Any] | None = None,
+    ):
+        """Run prefill in chunks to reduce peak memory, returning the last forward outputs.
+
+        This helper only performs forward passes and updates `past_key_values.seq_len`.
+        Callers typically read `outputs.logits` from the returned object.
+        """
+        model_forward_kwargs = model_forward_kwargs or {}
+        prefill_forward_kwargs = prefill_forward_kwargs or {}
+
+        current_kv_len = past_key_values.get_seq_length()
+        prefill_tokens = input_ids[:, current_kv_len:]
+        prefill_length = prefill_tokens.size(1)
+
+        chunk_size = (
+            prefill_length
+            if prefill_chunk_size is None
+            else min(prefill_length, int(prefill_chunk_size))
+        )
+
+        outputs = None
+        for start in range(0, prefill_length, chunk_size):
+            chunk = prefill_tokens[:, start : start + chunk_size]
+            current_kv_len = past_key_values.get_seq_length()
+            cache_position = torch.arange(
+                current_kv_len,
+                current_kv_len + chunk.size(1),
+                dtype=torch.long,
+                device=input_ids.device,
+            )
+
+            forward_common_kwargs: dict[str, Any] = {
+                "past_key_values": past_key_values.cache,
+                "cache_position": cache_position,
+            }
+            if use_position_ids:
+                forward_common_kwargs["position_ids"] = cache_position.unsqueeze(0)
+
+            # Last chunk returns logits (and optionally other outputs); earlier chunks only update KV.
+            if start + chunk_size < prefill_length:
+                self.target_model.model(chunk, **forward_common_kwargs, **model_forward_kwargs)
+            else:
+                outputs = self.target_model.prefill_forward(
+                    chunk,
+                    **forward_common_kwargs,
+                    logits_to_keep=1,
+                    **prefill_forward_kwargs,
+                )
+
+            past_key_values.seq_len += chunk.size(1)
+
+        return outputs
+
+    def _apply_tokenwise_stopping_criteria(
+        self,
+        input_ids: torch.LongTensor,
+        sampled_tokens: torch.LongTensor,
+        stopping_criteria: StoppingCriteria,
+    ):
+        """Apply stopping criteria token-by-token over a generated token block.
+
+        Returns: (finished, updated_input_ids, kept_sampled_tokens, prune_tokens)
+        where `prune_tokens` counts tokens removed from the tail after stop.
+        """
+        finished = False
+        prune_tokens = 0
+
+        for k in range(sampled_tokens.shape[1]):
+            res = stopping_criteria(sampled_tokens[:, k : k + 1], None)
+            finished = bool(res.item()) if hasattr(res, "item") else bool(res)
+            if finished:
+                prune_tokens = sampled_tokens.shape[1] - k - 1
+                if prune_tokens > 0:
+                    input_ids = input_ids[:, :-prune_tokens]
+                break
+
+        kept = (
+            sampled_tokens
+            if prune_tokens == 0
+            else sampled_tokens[:, : sampled_tokens.shape[1] - prune_tokens]
+        )
+        return finished, input_ids, kept, prune_tokens
     
     def create_kv_cache(
         self,

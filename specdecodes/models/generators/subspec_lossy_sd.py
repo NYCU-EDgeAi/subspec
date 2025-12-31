@@ -7,7 +7,12 @@ from ..utils.lossy_tree_verify import lossy_bottom_up_verify
 
 
 class SubSpecLossySDGeneratorBase(_SubSpecSDGeneratorBase):
-    """SubSpec SD (v1) + lossy bottom-up verification."""
+    """SubSpec SD v1 generator with lossy bottom-up verification.
+
+    Notes:
+    - Drafting is unchanged.
+    - Verification uses lossy bottom-up verification.
+    """
 
     def _verify(self, tree, root_ind, logits, logits_processor, do_sample, skip_nodes: int = 0):
         # v1 pipeline does not use skip_nodes, but keep signature for compatibility.

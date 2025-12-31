@@ -18,7 +18,7 @@ def load_custom_model(model, model_path, remove_embeddings=False):
     # Remove embed_tokens if not found (for custom models that uses LLM's embed_tokens)
     for key in missing_keys:
         if 'embed_tokens' in key:
-            print(f"embed_tokens not found. Use LLM's embed_tokens instead.")
+            logging.info("embed_tokens not found. Use LLM's embed_tokens instead.")
             if remove_embeddings:
                 del model.model.embed_tokens
     missing_keys = [key for key in missing_keys if 'embed_tokens' not in key]
@@ -231,36 +231,36 @@ class DraftModelBase(nn.Module):
         # batch_size, N_available_leaves = parent_probs.shape
         batch_size, N_available_leaves, vocab_size = sampled_probs.shape
         
-        #! Test
+        # NOTE: Optional shortcut for sample_k == 1 (kept disabled).
         # if sample_k == 1:
         #     device = sampled_probs.device
         #     return sampled_probs.argmax(dim=-1), sampled_probs.max(dim=-1).values, torch.zeros(batch_size, dtype=torch.long, device=device)[None], True
         
 
-        with nvtx.annotate("sampling_0"):
+        with nvtx.annotate("topk_sampling/contiguous"):
             # Ensure input tensors are contiguous (Not sure if this is needed)
             sampled_probs = sampled_probs.contiguous()
             parent_probs = parent_probs.contiguous()
 
-        with nvtx.annotate("sampling_1"):
+        with nvtx.annotate("topk_sampling/global_probs"):
             # Expand the sampled_probs to [batch_size, N_available_leaves, vocab_size]
             global_probs = sampled_probs * parent_probs.unsqueeze(-1)
 
-        with nvtx.annotate("sampling_2"):
+        with nvtx.annotate("topk_sampling/flatten"):
             # Flatten the global_probs to [N_available_leaves * vocab_size]
             flattened_probs = global_probs.view(batch_size, -1)  # Shape: [N_available_leaves * vocab_size]
 
-        with nvtx.annotate("sampling_3"):
+        with nvtx.annotate("topk_sampling/topk"):
             # Perform top-k sampling
             topk_probs, topk_indices = torch.topk(
                 flattened_probs, sample_k, dim=1, sorted=True
             )  # Both shape: [sample_k]
 
-        with nvtx.annotate("sampling_3"):
+        with nvtx.annotate("topk_sampling/parent_indices"):
             # Compute parent indices
             parent_indices = (topk_indices // vocab_size).long()  # Shape: [sample_k]
         
-        with nvtx.annotate("sampling_4"):
+        with nvtx.annotate("topk_sampling/token_ids"):
             # Compute token ids
             token_ids = (topk_indices % vocab_size).long()  # Shape: [sample_k]
 
@@ -271,3 +271,9 @@ class DraftModelBase(nn.Module):
         
     def get_tree(self):
         return self.tree
+
+    def _get_kv_len_int(self) -> int:
+        kv_len = self.past_key_values.get_seq_length()
+        if isinstance(kv_len, torch.Tensor):
+            kv_len = kv_len.item()
+        return int(kv_len)
