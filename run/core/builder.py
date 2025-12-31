@@ -73,6 +73,7 @@ class GeneratorPipelineBuilder:
             torch.cuda.manual_seed_all(self.seed)
 
             torch.set_float32_matmul_precision("high")
+            torch._dynamo.config.allow_unspec_int_on_nn_module = True
 
             # Set memory limit.
             total_memory = torch.cuda.get_device_properties(cuda_device).total_memory

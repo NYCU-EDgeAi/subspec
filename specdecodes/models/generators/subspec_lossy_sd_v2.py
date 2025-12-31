@@ -7,13 +7,12 @@ from ..utils.lossy_tree_verify import lossy_bottom_up_verify
 
 
 class SubSpecLossySDGeneratorBase(_SubSpecSDGeneratorBase):
-        """SubSpec SD v2 generator with lossy bottom-up verification.
+    """SubSpec SD v2 generator with lossy bottom-up verification.
 
-        Notes:
-        - Drafting is unchanged.
-        - Verification uses lossy bottom-up verification and accounts for postspec extending the tree.
-        """
-
+    Notes:
+    - Drafting is unchanged.
+    - Verification uses lossy bottom-up verification and accounts for postspec extending the tree.
+    """
     def _verify(self, tree, root_ind, logits, logits_processor, do_sample, skip_nodes: int = 0):
         # Build target probabilities (post-warp if do_sample=True).
         if do_sample and logits_processor is None:

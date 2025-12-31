@@ -1,7 +1,9 @@
-from typing import Set, List
+from typing import List, Set
+import logging
 import math
+import os
 import torch
-import nvtx, os
+import nvtx
 import flashinfer
 
 class KvCacheBatchPosition:
@@ -453,7 +455,11 @@ class FlashInferCache():
         
         if max_tokens is not None and num_pages_to_allocate * PAGE_LEN > max_tokens:
             num_pages_to_allocate = max_tokens // PAGE_LEN + 1
-        print(f"Reducing cache size to {1 * PAGE_LEN} tokens")
+        logging.info(
+            "FlashInferCache: allocating %d pages (%d tokens capacity)",
+            num_pages_to_allocate,
+            int(num_pages_to_allocate) * int(PAGE_LEN),
+        )
         
         self.kvCachePool = KvCachePool(
                 max_pages = num_pages_to_allocate,

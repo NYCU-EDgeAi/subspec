@@ -123,9 +123,9 @@ class nvtx_LlamaAttention(nn.Module):
 
         if self.config._attn_implementation != "eager":
             if self.config._attn_implementation == "sdpa" and kwargs.get("output_attentions", False):
-                print(
-                    "`torch.nn.functional.scaled_dot_product_attention` does not support `output_attentions=True`. Falling back to "
-                    'eager attention. This warning can be removed using the argument `attn_implementation="eager"` when loading the model.'
+                logging.warning(
+                    "SDPA does not support output_attentions=True; falling back to eager attention. "
+                    "Use attn_implementation=\"eager\" to remove this warning."
                 )
             else:
                 attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]

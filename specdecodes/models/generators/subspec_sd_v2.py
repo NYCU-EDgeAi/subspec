@@ -215,12 +215,12 @@ class SubSpecSDGeneratorBase(ClassicSDGeneratorBase):
                     cache_position = torch.arange(position_offset, position_offset+tree.size(), dtype=torch.long, device=input_ids.device)
                         
                 # * tree decoding
-                        with nvtx.annotate("target_decode", color="orange"):
+                with nvtx.annotate("target_decode", color="orange"):
                     self.draft_model.init_postspec()
                     outputs = self._tree_decoding(tree, past_key_values, position_offset=position_offset, cache_position=cache_position, skip_nodes=skip_nodes, device=input_ids.device)
                     next_token_logits = outputs.logits
                 
-                        with nvtx.annotate("postspec_update", color="cyan"):
+                with nvtx.annotate("postspec_update", color="cyan"):
                     tree = self.draft_model.update_tree_after_post()
                 
                 # * verify
