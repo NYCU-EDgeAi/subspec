@@ -1,4 +1,3 @@
-import transformers
 import logging
 
 from typing import Callable, List, Optional, Tuple, Union
@@ -16,6 +15,13 @@ from .attention_wrapper import (
     POS_ENCODING_MODE,
     AttentionRotaryParams,
 )
+
+
+try:
+    _dynamo_disable = torch._dynamo.disable  # type: ignore[attr-defined]
+except Exception:  # pragma: no cover
+    def _dynamo_disable(fn):
+        return fn
 
 class FiLlamaAttention(nn.Module):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
@@ -43,6 +49,7 @@ class FiLlamaAttention(nn.Module):
             config.num_attention_heads * self.head_dim, config.hidden_size, bias=config.attention_bias
         )
         
+    @_dynamo_disable
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -125,6 +132,7 @@ class FiQwen3Attention(nn.Module):
         
         self.sliding_window = None
 
+    @_dynamo_disable
     def forward(
         self,
         hidden_states: torch.Tensor,

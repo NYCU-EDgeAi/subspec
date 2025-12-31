@@ -224,25 +224,26 @@ class GeneratorPipelineBuilder:
             )
 
         logging.info(f"Compiling generator with mode: {self.compile_mode}")
-
+        
+        # FlashInfer methods generally require fullgraph=False to work.
+        method_name = str(getattr(self.config, "method", ""))
+        fullgraph = not method_name.endswith("_fi")
+        
         # If the target model uses offloading, torch.compile() (especially fullgraph/cudagraph-related paths)
         # is typically incompatible or provides little benefit. Skip compiling target_model in that case.
         has_offloader = bool(getattr(self.recipe, "offloader", None))
         if has_offloader:
             logging.info("Skipping torch.compile() for target_model because recipe.offloader is set.")
         else:
-            generator.target_model.forward = torch.compile(generator.target_model.forward, mode=self.compile_mode, dynamic=False, fullgraph=True)
+            generator.target_model.forward = torch.compile(generator.target_model.forward, mode=self.compile_mode, dynamic=False, fullgraph=fullgraph)
 
         # Compile draft model if it exists
         if getattr(generator, 'draft_model', None) is not None:
-            # FlashInfer methods generally require fullgraph=False to work.
-            method_name = str(getattr(self.config, "method", ""))
-            draft_fullgraph = not method_name.endswith("_fi")
             generator.draft_model.forward = torch.compile(
                 generator.draft_model.forward,
                 mode=self.compile_mode,
                 dynamic=False,
-                fullgraph=draft_fullgraph,
+                fullgraph=fullgraph,
             )
     
     def post_process(self, generator, tokenizer, past_kv, draft_past_kv):
