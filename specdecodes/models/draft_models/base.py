@@ -226,44 +226,56 @@ class DraftModelBase(nn.Module):
         sampled_probs: torch.Tensor, 
         parent_probs: torch.Tensor, 
         sample_k: int
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        
-        # batch_size, N_available_leaves = parent_probs.shape
-        batch_size, N_available_leaves, vocab_size = sampled_probs.shape
-        
-        # NOTE: Optional shortcut for sample_k == 1 (kept disabled).
-        # if sample_k == 1:
-        #     device = sampled_probs.device
-        #     return sampled_probs.argmax(dim=-1), sampled_probs.max(dim=-1).values, torch.zeros(batch_size, dtype=torch.long, device=device)[None], True
-        
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
 
         with nvtx.annotate("topk_sampling/contiguous"):
-            # Ensure input tensors are contiguous (Not sure if this is needed)
             sampled_probs = sampled_probs.contiguous()
             parent_probs = parent_probs.contiguous()
 
-        with nvtx.annotate("topk_sampling/global_probs"):
-            # Expand the sampled_probs to [batch_size, N_available_leaves, vocab_size]
-            global_probs = sampled_probs * parent_probs.unsqueeze(-1)
+        return self._topk_flatten(sampled_probs, parent_probs, sample_k)
 
-        with nvtx.annotate("topk_sampling/flatten"):
-            # Flatten the global_probs to [N_available_leaves * vocab_size]
-            flattened_probs = global_probs.view(batch_size, -1)  # Shape: [N_available_leaves * vocab_size]
+    def _topk_flatten(
+        self,
+        sampled_probs: torch.Tensor,
+        parent_probs: torch.Tensor,
+        k: int,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        batch_size, num_leaves, vocab_size = sampled_probs.shape
+        k = min(int(k), int(vocab_size))
 
-        with nvtx.annotate("topk_sampling/topk"):
-            # Perform top-k sampling
-            topk_probs, topk_indices = torch.topk(
-                flattened_probs, sample_k, dim=1, sorted=True
-            )  # Both shape: [sample_k]
+        buf = getattr(self, "_topk_global_scores_buf", None)
+        if (
+            buf is None
+            or buf.shape != sampled_probs.shape
+            or buf.dtype != sampled_probs.dtype
+            or buf.device != sampled_probs.device
+        ):
+            buf = torch.empty_like(sampled_probs)
+            self._topk_global_scores_buf = buf
 
-        with nvtx.annotate("topk_sampling/parent_indices"):
-            # Compute parent indices
-            parent_indices = (topk_indices // vocab_size).long()  # Shape: [sample_k]
-        
-        with nvtx.annotate("topk_sampling/token_ids"):
-            # Compute token ids
-            token_ids = (topk_indices % vocab_size).long()  # Shape: [sample_k]
+        torch.mul(sampled_probs, parent_probs.unsqueeze(-1), out=buf)
+        flattened_probs = buf.view(batch_size, -1)
+        topk_probs, topk_indices = torch.topk(flattened_probs, k, dim=1, sorted=True)
+        parent_indices = (topk_indices // vocab_size).long()
+        token_ids = (topk_indices % vocab_size).long()
+        return token_ids, topk_probs, parent_indices
 
+    def _topk_flatten_for_graph(
+        self,
+        sampled_probs_ref: torch.Tensor,
+        parent_probs_buf: torch.Tensor,
+        outbuf: torch.Tensor,
+        k: int,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Exact flatten+topk path used by the CUDA-graph sampling runner."""
+        batch_size, _, vocab_size = sampled_probs_ref.shape
+        k = min(int(k), int(vocab_size))
+
+        torch.mul(sampled_probs_ref, parent_probs_buf.unsqueeze(-1), out=outbuf)
+        flattened_probs = outbuf.view(batch_size, -1)
+        topk_probs, topk_indices = torch.topk(flattened_probs, k, dim=1, sorted=True)
+        parent_indices = (topk_indices // vocab_size).long()
+        token_ids = (topk_indices % vocab_size).long()
         return token_ids, topk_probs, parent_indices
     
     def set_past_key_values(self, past_key_values):
