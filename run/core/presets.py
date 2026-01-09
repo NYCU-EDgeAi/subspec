@@ -45,7 +45,7 @@ def flashinfer_load_draft_model(builder, target_model, tokenizer, draft_model_pa
     except ModuleNotFoundError as e:
         raise ImportError(
             f"Method '{builder.config.method}' requires the optional dependency 'flashinfer'.\n"
-            "Hint: install it (and its deps), e.g. `pip install flashinfer`, then retry."
+            "Hint: install it (and its deps), e.g. `pip install flashinfer-python`, then retry."
         ) from e
     
     # We need to get the class from the registry entry that is currently being used/loaded.
