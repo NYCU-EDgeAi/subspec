@@ -105,7 +105,9 @@ def _apply_yaml_overrides(default_config: Dict[str, Any], yaml_config: Dict[str,
 
 
 def _build_base_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(add_help=False)
+    # Important: disable allow_abbrev so Typer subcommand flags like --d/--k
+    # don't get parsed as abbreviations for top-level options (e.g., --device).
+    parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
     parser.add_argument(
         "--method",
         type=str,
@@ -187,7 +189,7 @@ def _maybe_reexec_with_nsys(enabled: bool, output: str) -> None:
 
 
 def _build_full_parser(base_parser: argparse.ArgumentParser, default_config: Dict[str, Any]) -> argparse.ArgumentParser:
-    full_parser = argparse.ArgumentParser(parents=[base_parser], add_help=False)
+    full_parser = argparse.ArgumentParser(parents=[base_parser], add_help=False, allow_abbrev=False)
 
     full_parser.add_argument(
         "--llm-path",

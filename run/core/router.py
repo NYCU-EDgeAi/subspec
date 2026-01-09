@@ -36,7 +36,6 @@ def run_app(builder):
             python custom.py run-grid-search --t=0.3,0.4 --d=4,8,16,32 --k=8 --max-samples=10
         """
         from run.pipelines.run_grid_search import main as main_run_grid_search
-        from .builder import GeneratorPipelineBuilders
         main_run_grid_search(builder, temperature_values=t, max_depth_values=d, topk_len_values=k, max_samples=max_samples)
         
     @app.command()
