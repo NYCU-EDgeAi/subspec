@@ -33,9 +33,13 @@ def flashinfer_load_kv_cache(builder, target_model, draft_model):
     past_key_values = FlashInferCache(
         target_model.config, max_tokens=max_cache_len, PAGE_LEN=max_cache_len
     ).kvCachePool
-    draft_past_key_values = FlashInferCache(
-        draft_model.config, max_tokens=max_cache_len, PAGE_LEN=max_cache_len
-    ).kvCachePool
+    entry = ModelRegistry.get(builder.config.method)
+    needs_draft_kv_cache = bool(getattr(entry, "needs_draft_kv_cache", True)) if entry else True
+    draft_past_key_values = None
+    if needs_draft_kv_cache:
+        draft_past_key_values = FlashInferCache(
+            draft_model.config, max_tokens=max_cache_len, PAGE_LEN=max_cache_len
+        ).kvCachePool
 
     return past_key_values, draft_past_key_values
 
@@ -118,7 +122,8 @@ def register_presets():
             default_config={
                 "recipe": SubSpecRecipeV1(),
                 "llm_path": "meta-llama/Llama-3.2-1B-Instruct",
-            }
+            },
+            needs_draft_kv_cache=False,
         )
     except ImportError:
         pass
@@ -166,7 +171,8 @@ def register_presets():
             default_config={
                 "recipe": SubSpecRecipeV2(),
                 "llm_path": "meta-llama/Llama-3.1-8B-Instruct",
-            }
+            },
+            needs_draft_kv_cache=False,
         )
     except ImportError:
         pass
@@ -201,6 +207,7 @@ def register_presets():
             },
             load_draft_model_fn=flashinfer_load_draft_model,
             load_kv_cache_fn=flashinfer_load_kv_cache,
+            needs_draft_kv_cache=False,
         )
     except ImportError:
         # If the base SubSpec recipe isn't importable, don't register this method.
@@ -239,7 +246,8 @@ def register_presets():
             default_config={
                 "llm_path": "meta-llama/Llama-3.1-8B-Instruct",
                 "recipe": SubSpecRecipeV1(),
-            }
+            },
+            needs_draft_kv_cache=False,
         )
     except ImportError:
         pass
@@ -259,7 +267,8 @@ def register_presets():
             default_config={
                 "llm_path": "meta-llama/Llama-3.1-8B-Instruct",
                 "recipe": SubSpecRecipeNoOffload(),
-            }
+            },
+            needs_draft_kv_cache=False,
         )
     except ImportError:
         pass

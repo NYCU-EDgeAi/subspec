@@ -125,8 +125,28 @@ class GeneratorPipelineBuilder:
     
     def load_kv_cache(self, target_model, draft_model):    
         entry = ModelRegistry.get(self.config.method)
+        # If there is no draft model, we never allocate a draft KV cache.
+        if draft_model is None:
+            if self.cache_implementation == "static":
+                if self.max_length is None:
+                    raise ValueError("max_length should be set for static cache.")
+                past_key_values = create_kv_cache(
+                    "static",
+                    max_cache_len=self.max_length,
+                    max_batch_size=1,
+                    config=target_model.model.config,
+                    device=self.device,
+                    dtype=target_model.model.dtype,
+                )
+            else:
+                past_key_values = create_kv_cache("dynamic")
+            return past_key_values, None
+
+        needs_draft_kv_cache = bool(getattr(entry, "needs_draft_kv_cache", True)) if entry else True
+
         if entry and entry.load_kv_cache_fn:
-            return entry.load_kv_cache_fn(self, target_model, draft_model)
+            past_key_values, draft_past_key_values = entry.load_kv_cache_fn(self, target_model, draft_model)
+            return past_key_values, draft_past_key_values if needs_draft_kv_cache else None
                     
         if self.cache_implementation == "static":
             if self.max_length is not None:
@@ -160,7 +180,7 @@ class GeneratorPipelineBuilder:
                 dtype=target_model.model.dtype,
             )
             # if generator.draft_model is not None:
-            if draft_model is not None:
+            if needs_draft_kv_cache:
                 draft_past_key_values = create_kv_cache(
                     "static",
                     max_cache_len=max_cache_len,
@@ -174,7 +194,7 @@ class GeneratorPipelineBuilder:
         else:
             # Create dynamic kv-cache
             past_key_values = create_kv_cache("dynamic")
-            if draft_model is not None:
+            if needs_draft_kv_cache:
                 draft_past_key_values = create_kv_cache("dynamic")
             else:
                 draft_past_key_values = None
