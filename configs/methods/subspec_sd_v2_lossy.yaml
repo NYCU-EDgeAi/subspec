@@ -4,7 +4,7 @@ method: subspec_sd_v2
 llm_path: meta-llama/Llama-3.1-8B-Instruct
 
 recipe:
-  class_path: specdecodes.helpers.recipes.subspec.hqq_4bit_attn_4bit_mlp_postspec:Recipe
+  class_path: specdecodes.helpers.recipes.subspec.hqq_4bit_postspec:Recipe
 
 max_length: 4096
 cache_implementation: static
@@ -19,7 +19,7 @@ generator_kwargs:
 
 draft_params:
   temperature: 0.2
-  max_depth: 16
+  max_depth: 24
   topk_len: 6
   lossy_threshold: 0.3
   lossy_window_size: 6

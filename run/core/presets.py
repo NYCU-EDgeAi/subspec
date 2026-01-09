@@ -107,7 +107,9 @@ def register_presets():
     try:
         from specdecodes.models.generators.subspec_sd import SubSpecSDGenerator
         from specdecodes.models.draft_models.subspec_sd import SubSpecSDDraftModel
-        from specdecodes.helpers.recipes.subspec.hqq_4bit_attn_4bit_mlp import Recipe as SubSpecRecipeV1
+        from specdecodes.helpers.recipes.subspec.hqq_4bit_postspec import (
+            Recipe as SubSpecRecipeV1,
+        )
 
         ModelRegistry.register(
             name="subspec_sd",
@@ -153,7 +155,7 @@ def register_presets():
     try:
         from specdecodes.models.generators.subspec_sd_v2 import SubSpecSDGenerator as SubSpecSDGeneratorV2
         from specdecodes.models.draft_models.subspec_sd import SubSpecSDDraftModel
-        from specdecodes.helpers.recipes.subspec.hqq_4bit_attn_4bit_mlp_postspec import (
+        from specdecodes.helpers.recipes.subspec.hqq_4bit_postspec import (
             Recipe as SubSpecRecipeV2,
         )
         
@@ -185,7 +187,9 @@ def register_presets():
 
     # SubSpec SD FlashInfer (lazy import)
     try:
-        from specdecodes.helpers.recipes.subspec.hqq_4bit_attn_4bit_mlp import Recipe as SubSpecRecipeV1
+        from specdecodes.helpers.recipes.subspec.hqq_4bit_postspec import (
+            Recipe as SubSpecRecipeV1,
+        )
 
         ModelRegistry.register(
             name="subspec_sd_fi",
@@ -224,7 +228,9 @@ def register_presets():
     try:
         from specdecodes.models.generators.subspec_seq_sd import SubSpecSDGenerator as SubSpecSDGeneratorSeq
         from specdecodes.models.draft_models.subspec_seq_sd import SubSpecSDDraftModel as SubSpecSDDraftModelSeq
-        from specdecodes.helpers.recipes.subspec.hqq_4bit_attn_4bit_mlp import Recipe as SubSpecRecipeV1
+        from specdecodes.helpers.recipes.subspec.hqq_4bit_postspec import (
+            Recipe as SubSpecRecipeV1,
+        )
 
         ModelRegistry.register(
             name="subspec_seq_sd",
@@ -242,7 +248,7 @@ def register_presets():
     try:
         from specdecodes.models.generators.subspec_sd import SubSpecSDGenerator
         from specdecodes.models.draft_models.subspec_sd import SubSpecSDDraftModel
-        from specdecodes.helpers.recipes.subspec.hqq_4bit_attn_4bit_mlp_no_offload import (
+        from specdecodes.helpers.recipes.subspec.hqq_4bit_no_offload import (
             Recipe as SubSpecRecipeNoOffload,
         )
         
