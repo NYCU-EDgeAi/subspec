@@ -112,7 +112,14 @@ class TestOpenAIRealModelIntegration(unittest.TestCase):
                 "temperature": 0.0,
             },
         ) as r:
-            self.assertEqual(r.status_code, 200, r.text)
+            if r.status_code != 200:
+                # httpx doesn't allow accessing r.text on streaming responses
+                # without first reading the body.
+                body = r.read()
+                if isinstance(body, bytes):
+                    body = body.decode("utf-8", errors="replace")
+                self.fail(f"Unexpected status_code={r.status_code}. Body: {body}")
+            self.assertEqual(r.status_code, 200)
             self.assertIn("text/event-stream", r.headers.get("content-type", ""))
 
             data_lines = []
