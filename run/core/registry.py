@@ -43,6 +43,9 @@ class ModelRegistryEntry:
     load_model_fn: Optional[Callable] = None
     load_draft_model_fn: Optional[Callable] = None
     load_kv_cache_fn: Optional[Callable] = None
+    # Whether the method needs a separate draft KV cache when a draft model is present.
+    # Many methods (e.g., SubSpec) can share the target KV cache.
+    needs_draft_kv_cache: bool = True
 
     _resolved_generator_cls: Any = field(default=None, init=False, repr=False, compare=False)
     _resolved_draft_model_cls: Any = field(default=None, init=False, repr=False, compare=False)
@@ -78,6 +81,7 @@ class ModelRegistry:
         load_model_fn: Optional[Callable] = None,
         load_draft_model_fn: Optional[Callable] = None,
         load_kv_cache_fn: Optional[Callable] = None,
+        needs_draft_kv_cache: bool = True,
     ):
         if default_config is None:
             default_config = {}
@@ -89,6 +93,7 @@ class ModelRegistry:
             load_model_fn=load_model_fn,
             load_draft_model_fn=load_draft_model_fn,
             load_kv_cache_fn=load_kv_cache_fn,
+            needs_draft_kv_cache=bool(needs_draft_kv_cache),
         )
 
     @classmethod
