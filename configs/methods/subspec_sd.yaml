@@ -4,7 +4,7 @@ method: subspec_sd
 llm_path: meta-llama/Llama-3.1-8B-Instruct
 
 recipe:
-  class_path: specdecodes.helpers.recipes.subspec.hqq_4bit_attn_4bit_mlp:Recipe
+  class_path: specdecodes.helpers.recipes.subspec.hqq_4bit_postspec:Recipe
 
 max_length: 4096
 cache_implementation: static

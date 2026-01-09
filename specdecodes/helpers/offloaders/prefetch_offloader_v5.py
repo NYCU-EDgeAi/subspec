@@ -1,4 +1,3 @@
-import time
 import torch
 from torch import nn
 from ..model_layer_orders import MODEL_TYPE_GET_LAYER_ORDER
@@ -65,12 +64,14 @@ def trim_layer_number(name: str) -> str:
     return ".".join(x for x in name.split(".") if not x.isdigit())
 
 class PrefetchOffloader:
-    def __init__(self, model: nn.Module, device_map: dict, record_stream=False, draft_model: nn.Module = None):
+    def __init__(self, model: nn.Module, device_map: dict, draft_model: nn.Module = None):
         check_device_map(model, device_map)
         self.gpu_device = device_map["model.embed_tokens"]
         self.cpu_tensors = {}
         self.stream = torch.cuda.Stream()
-        self.record_stream = record_stream
+
+        # Per-module copy completion events. Keyed by module object.
+        self._copy_event_by_module = {}
 
         self._cache_cpu_layers(model, device_map)
         assert model.model.embed_tokens.weight.device.type == "cuda"
@@ -141,20 +142,17 @@ class PrefetchOffloader:
                 for p, c in zip(get_tensors(next_layer), cpu_params):
                     # p.data.copy_(c)
                     c.copy_to(p.data, non_blocking=True)
-                    if self.record_stream:
-                        p.data.record_stream(torch.cuda.current_stream())
+
+                evt = torch.cuda.Event(blocking=False, interprocess=False)
+                evt.record(self.stream)
+                self._copy_event_by_module[next_layer] = evt
 
         return hook
     
-    def _create_slowdown_hook(self):
-        """Adds a small delay to test timing effects."""
-        def hook(module, inputs, output):
-            time.sleep(0.05)
-        return hook
-
     def _create_wait_hook(self):
-        """Waits for any pending async copies in self.stream to finish before forward execution."""
+        """Wait for this module's weights via CUDA events (no full-device sync)."""
         def hook(module, inputs):
-            # torch.cuda.current_stream().wait_stream(self.stream)
-            torch.cuda.synchronize()
+            evt = self._copy_event_by_module.get(module)
+            if evt is not None:
+                torch.cuda.current_stream().wait_event(evt)
         return hook

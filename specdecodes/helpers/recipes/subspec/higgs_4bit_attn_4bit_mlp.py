@@ -1,6 +1,6 @@
 from ..base_recipe import QuantOffloadRecipe
 from ...quantizers.higgs import HiggsQuantizer
-from ...offloaders.prefetch_offloader_v5 import PrefetchOffloader
+from ...offloaders.prefetch_offloader import PrefetchOffloader
 
 class Recipe(QuantOffloadRecipe):
     def __init__(self):

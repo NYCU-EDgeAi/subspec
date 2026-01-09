@@ -46,24 +46,32 @@ class ChunkedPinMemory:
         for chunk, size in zip(self.chunks, self.sizes):
             flat_gpu[offset : offset + size].copy_(chunk, non_blocking=non_blocking)
             offset += size
+            
+# class ChunkedPinMemory:
+#     """
+#     Splits a tensor into power-of-2 pinned-memory chunks,
+#     ensuring chunk size doesn't fall below a specified minimum size (1MB default).
+#     """
+#     def __init__(self, org_tensor, min_chunk_bytes=1 * 1024 * 1024):
+#         self.org_tensor = org_tensor
+
+#     def copy_to(self, gpu_tensor, non_blocking=False):
+#         self.org_tensor.copy_(gpu_tensor, non_blocking=non_blocking)
+        
 
 def trim_layer_number(name: str) -> str:
     """Removes numeric fields from a dotted path (e.g. 'layer.0' -> 'layer')."""
     return ".".join(x for x in name.split(".") if not x.isdigit())
 
 class PrefetchOffloader:
-    def __init__(self, model: nn.Module, device_map: dict, record_stream=False, draft_model: nn.Module = None):
+    def __init__(self, model: nn.Module, device_map: dict, draft_model: nn.Module = None):
         check_device_map(model, device_map)
         self.gpu_device = device_map["model.embed_tokens"]
         self.cpu_tensors = {}
         self.stream = torch.cuda.Stream()
-        self.record_stream = record_stream
-        self.draft_model = draft_model
 
-        self.prefetch_stream = torch.cuda.Stream()
-        self.draft_stream    = torch.cuda.Stream()
-        self.copy_done_event  = torch.cuda.Event(blocking=False, interprocess=False)
-        self.draft_done_event = torch.cuda.Event(blocking=False, interprocess=False)
+        # Per-module copy completion events. Keyed by module object.
+        self._copy_event_by_module = {}
 
         self._cache_cpu_layers(model, device_map)
         assert model.model.embed_tokens.weight.device.type == "cuda"
@@ -87,74 +95,29 @@ class PrefetchOffloader:
             # p.data.copy_(c)
             c.copy_to(p.data)
 
-        i = 1
+        # Connect subsequent CPU layers in a chain
         current_layer = first_cpu_layer
-        while i < len(cpu_layer_order):
-            name = cpu_layer_order[i]
+        # print("Applying PrefetchOffloader V5:")
+        for name in cpu_layer_order[1:]:
+            # print(f"layer: {name}")
             next_layer = find_child(model, name)
-            
-            # check if next layer is an MLP gate_proj  (current_layer is self-attn o_proj)
-            if name.endswith(".mlp.up_proj"):
-                # collect gate/up/down
-                prefix = name.split(".mlp.")[0] + ".mlp"
-                # gate_name = name
-                up_name   = prefix + ".up_proj"
-                down_name = prefix + ".down_proj"
-
-                # gate_mod = find_child(model, gate_name)
-                up_mod   = find_child(model, up_name)
-                down_mod = find_child(model, down_name)
-
-                mlp_modules = [
-                    # (gate_mod, self.cpu_tensors[gate_name]),
-                    (up_mod,   self.cpu_tensors[up_name]),
-                    (down_mod, self.cpu_tensors[down_name]),
-                ]
-
-                # 1) prefetch gate/up/down in advance
-                current_layer.register_forward_pre_hook(self._create_wait_hook())
-                current_layer.register_forward_pre_hook(self._create_mlp_kickoff_hook(mlp_modules))
-                # print("prefetch MLP:", gate_name, up_name, down_name)
-
-                # create post hook for draft in o proj
-                current_layer.register_forward_hook(self._create_draft_hook())
-                # current_layer.register_forward_pre_hook(self._create_pre_draft_hook(), prepend=False)
-
-                # 3) create wait hooks for gate/up/down
-                # gate_mod.register_forward_pre_hook(self._create_wait_hook())
-                up_mod.register_forward_pre_hook(self._create_wait_hook())
-                down_mod.register_forward_pre_hook(self._create_wait_hook())
-                # print("wait MLP:", gate_name, up_name)
-
-                # skip gate/up, set current_layer to down
-                current_layer = down_mod
-                i += 2
-                continue
-
-            # non-MLP layer processing
             current_layer.register_forward_pre_hook(self._create_wait_hook())
             current_layer.register_forward_pre_hook(self._create_prefetch_hook(next_layer, self.cpu_tensors[name]))
+            # current_layer.register_forward_hook(self._create_slowdown_hook())
             current_layer = next_layer
-            i += 1
             
-            # print("prefetch non-MLP:", name)
-            
-
         current_layer.register_forward_pre_hook(self._create_wait_hook())
-        current_layer.register_forward_pre_hook(
-            self._create_prefetch_hook(first_cpu_layer, self.cpu_tensors[first_name])
-        )
-        
-        # print("prefetch loop back to first layer:", first_name)
-        
-        
+        current_layer.register_forward_pre_hook(self._create_prefetch_hook(first_cpu_layer, self.cpu_tensors[first_name]))
+        # current_layer.register_forward_hook(self._create_slowdown_hook())
     
     def _cache_cpu_layers(self, model, device_map):
         """Moves CPU layers to pinned memory and creates GPU-shaped placeholders."""
         tensor_cache = {}
+        # print("Caching CPU layers with PrefetchOffloader V5:")
         for name, dev_str in device_map.items():
             layer = find_child(model, name)
             if dev_str == "cpu":
+                # print(f"layer: {name}")
                 trimmed = trim_layer_number(name)
                 if trimmed not in tensor_cache:
                     placeholders = [torch.zeros_like(p, device=self.gpu_device, memory_format=torch.contiguous_format)
@@ -179,42 +142,17 @@ class PrefetchOffloader:
                 for p, c in zip(get_tensors(next_layer), cpu_params):
                     # p.data.copy_(c)
                     c.copy_to(p.data, non_blocking=True)
-                    if self.record_stream:
-                        p.data.record_stream(torch.cuda.current_stream())
-        
-        return hook
-    
-    def _create_pre_draft_hook(self):
-        def hook(module, inputs):
-            self.draft_model.postspec()
+
+                evt = torch.cuda.Event(blocking=False, interprocess=False)
+                evt.record(self.stream)
+                self._copy_event_by_module[next_layer] = evt
+
         return hook
     
     def _create_wait_hook(self):
-        """Waits for any pending async copies in self.stream to finish before forward execution."""
+        """Wait for this module's weights via CUDA events (no full-device sync)."""
         def hook(module, inputs):
-            torch.cuda.synchronize() 
-        return hook
-    
-    def _create_mlp_kickoff_hook(self, mlp_modules):
-        def hook(module, inputs):
-            # 1) 非同步拷貝 gate/up/down
-            with torch.cuda.stream(self.stream):
-                for submod, cpu_params in mlp_modules:
-                    for p, c in zip(get_tensors(submod), cpu_params):
-                        c.copy_to(p.data, non_blocking=True)
-                        if self.record_stream:
-                            p.data.record_stream(self.stream)
-        return hook
-
-    def _create_mlp_barrier_hook(self):
-        def hook(module, inputs):
-            s = torch.cuda.current_stream()
-            s.wait_event(self.copy_done_event)
-            s.wait_event(self.draft_done_event)
-        return hook
-
-    def _create_draft_hook(self):
-        def hook(module, inputs, output):
-            self.draft_model.postspec()
-                # self.draft_done_event.record(self.draft_stream)
+            evt = self._copy_event_by_module.get(module)
+            if evt is not None:
+                torch.cuda.current_stream().wait_event(evt)
         return hook

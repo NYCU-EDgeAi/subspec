@@ -1,7 +1,7 @@
 from specdecodes.helpers.recipes.base_recipe import QuantOffloadRecipe
 from hqq.core.quantize import *
 from ...quantizers.hqq import HqqQuantizer
-from ...offloaders.prefetch_offloader_v5 import PrefetchOffloader
+from ...offloaders.prefetch_offloader import PrefetchOffloader
 
 
 class Recipe(QuantOffloadRecipe):

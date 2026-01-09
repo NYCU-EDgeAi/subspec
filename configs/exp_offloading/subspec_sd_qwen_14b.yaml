@@ -18,7 +18,7 @@ draft_params:
   topk_len: 6
 
 recipe:
-  class_path: specdecodes.helpers.recipes.subspec.hqq_4bit_attn_4bit_mlp:Recipe
+  class_path: specdecodes.helpers.recipes.subspec.hqq_4bit_postspec:Recipe
 
 cache_implementation: static
 warmup_iter: 3

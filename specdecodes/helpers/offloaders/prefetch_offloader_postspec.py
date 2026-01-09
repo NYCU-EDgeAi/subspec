@@ -52,13 +52,21 @@ def trim_layer_number(name: str) -> str:
     return ".".join(x for x in name.split(".") if not x.isdigit())
 
 class PrefetchOffloader:
-    def __init__(self, model: nn.Module, device_map: dict, record_stream=False, draft_model: nn.Module = None):
+    def __init__(self, model: nn.Module, device_map: dict, draft_model: nn.Module = None):
         check_device_map(model, device_map)
         self.gpu_device = device_map["model.embed_tokens"]
         self.cpu_tensors = {}
         self.stream = torch.cuda.Stream()
-        self.record_stream = record_stream
         self.draft_model = draft_model
+
+        self.draft_stream = torch.cuda.Stream()
+        self.draft_done_event = torch.cuda.Event(blocking=False, interprocess=False)
+
+        # Per-module copy completion events. Keyed by module object.
+        self._copy_event_by_module = {}
+        # Avoid launching draft work multiple times for the same pending copy event.
+        self._draft_launched_for_copy_event = set()
+        self._draft_in_flight = False
 
         self._cache_cpu_layers(model, device_map)
         assert model.model.embed_tokens.weight.device.type == "cuda"
@@ -82,21 +90,62 @@ class PrefetchOffloader:
             # p.data.copy_(c)
             c.copy_to(p.data)
 
+        i = 1
         current_layer = first_cpu_layer
-        for name in cpu_layer_order[1:]:
-            # print(f"layer: {name}")
+        while i < len(cpu_layer_order):
+            name = cpu_layer_order[i]
             next_layer = find_child(model, name)
+            
+            # Bundle the full MLP block (gate/up/down) together.
+            # Trigger on gate_proj so the preceding module is typically self_attn.o_proj.
+            if name.endswith(".mlp.gate_proj"):
+                prefix = name.split(".mlp.")[0] + ".mlp"
+                gate_name = prefix + ".gate_proj"
+                up_name = prefix + ".up_proj"
+                down_name = prefix + ".down_proj"
 
+                gate_mod = find_child(model, gate_name)
+                up_mod = find_child(model, up_name)
+                down_mod = find_child(model, down_name)
+
+                mlp_modules = [
+                    (gate_mod, self.cpu_tensors[gate_name]),
+                    (up_mod, self.cpu_tensors[up_name]),
+                    (down_mod, self.cpu_tensors[down_name]),
+                ]
+
+                current_layer.register_forward_pre_hook(self._create_wait_hook())
+                current_layer.register_forward_pre_hook(self._create_mlp_kickoff_hook(mlp_modules))
+
+                # Wait hooks for the actual MLP modules. Draft work is launched (once) when gate_proj
+                # is about to run and its copy is still pending.
+                gate_mod.register_forward_pre_hook(self._create_wait_hook(maybe_run_draft=True))
+                up_mod.register_forward_pre_hook(self._create_wait_hook())
+                down_mod.register_forward_pre_hook(self._create_wait_hook())
+
+                current_layer = down_mod
+                i += 3
+                continue
+
+            # non-MLP layer processing
             current_layer.register_forward_pre_hook(self._create_wait_hook())
             current_layer.register_forward_pre_hook(self._create_prefetch_hook(next_layer, self.cpu_tensors[name]))
-            
-            if name.endswith(".self_attn.o_proj"):
-                # current_layer.register_forward_pre_hook(self._create_draft_pre_hook())
-                current_layer.register_forward_hook(self._create_draft_hook())
             current_layer = next_layer
+            i += 1
             
+            # print("prefetch non-MLP:", name)
+            
+
         current_layer.register_forward_pre_hook(self._create_wait_hook())
-        current_layer.register_forward_pre_hook(self._create_prefetch_hook(first_cpu_layer, self.cpu_tensors[first_name]))
+        current_layer.register_forward_pre_hook(
+            self._create_prefetch_hook(first_cpu_layer, self.cpu_tensors[first_name])
+        )
+
+        # Ensure any in-flight draft work is ordered before the caller proceeds.
+        model.register_forward_hook(self._create_model_end_hook())
+        
+        # print("prefetch loop back to first layer:", first_name)
+        
         
     
     def _cache_cpu_layers(self, model, device_map):
@@ -129,23 +178,65 @@ class PrefetchOffloader:
                 for p, c in zip(get_tensors(next_layer), cpu_params):
                     # p.data.copy_(c)
                     c.copy_to(p.data, non_blocking=True)
-                    if self.record_stream:
-                        p.data.record_stream(torch.cuda.current_stream())
+
+                evt = torch.cuda.Event(blocking=False, interprocess=False)
+                evt.record(self.stream)
+                self._copy_event_by_module[next_layer] = evt
         
         return hook
     
-    def _create_draft_pre_hook(self):
+    def _create_pre_draft_hook(self):
         def hook(module, inputs):
             self.draft_model.postspec()
         return hook
     
-    def _create_draft_hook(self):
+    def _create_wait_hook(self, maybe_run_draft: bool = False):
+        """Wait for this module's weights via CUDA events (no full-device sync)."""
+        def hook(module, inputs):
+            evt = self._copy_event_by_module.get(module)
+            if evt is None:
+                return
+
+            if maybe_run_draft and self.draft_model is not None and not evt.query():
+                evt_id = id(evt)
+                if evt_id not in self._draft_launched_for_copy_event:
+                    self._draft_launched_for_copy_event.add(evt_id)
+                    self._launch_draft_postspec_while_copy_pending(evt)
+
+            torch.cuda.current_stream().wait_event(evt)
+
+        return hook
+    
+    def _create_mlp_kickoff_hook(self, mlp_modules):
+        def hook(module, inputs):
+            with torch.cuda.stream(self.stream):
+                for submod, cpu_params in mlp_modules:
+                    for p, c in zip(get_tensors(submod), cpu_params):
+                        c.copy_to(p.data, non_blocking=True)
+
+                evt = torch.cuda.Event(blocking=False, interprocess=False)
+                evt.record(self.stream)
+                for submod, _ in mlp_modules:
+                    self._copy_event_by_module[submod] = evt
+        return hook
+
+    def _launch_draft_postspec_while_copy_pending(self, copy_evt: torch.cuda.Event, max_steps: int = 8):
+        """Enqueue several postspec steps while the MLP copy is pending."""
+        with torch.cuda.stream(self.draft_stream):
+            steps = 0
+            while steps < max_steps and not copy_evt.query():
+                self.draft_model.postspec()
+                steps += 1
+            if steps > 0:
+                self.draft_done_event.record(self.draft_stream)
+                self._draft_in_flight = True
+
+    def _create_model_end_hook(self):
         def hook(module, inputs, output):
-            self.draft_model.postspec()
-        return hook
-    
-    def _create_wait_hook(self):
-        """Waits for any pending async copies in self.stream to finish before forward execution."""
-        def hook(module, inputs):
-            torch.cuda.synchronize() 
+            if self._draft_in_flight:
+                torch.cuda.current_stream().wait_event(self.draft_done_event)
+
+            self._draft_in_flight = False
+            self._draft_launched_for_copy_event.clear()
+            return output
         return hook
