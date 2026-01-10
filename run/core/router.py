@@ -29,14 +29,29 @@ def run_app(builder):
         run_agent_test(builder)
 
     @app.command()
-    def run_grid_search(t: str, d: str, k: str, max_samples: int = None):
+    def run_grid_search(
+        t: str,
+        d: str,
+        k: str,
+        e: str = typer.Option(None, help="Comma-separated lossy_threshold values (e.g. 0.1,0.2,0.3)"),
+        w: str = typer.Option(None, help="Comma-separated lossy_window_size values (e.g. 4,6,8)"),
+        max_samples: int = None,
+    ):
         """
         Example subcommand for grid search.
         Usage:
             python custom.py run-grid-search --t=0.3,0.4 --d=4,8,16,32 --k=8 --max-samples=10
         """
         from run.pipelines.run_grid_search import main as main_run_grid_search
-        main_run_grid_search(builder, temperature_values=t, max_depth_values=d, topk_len_values=k, max_samples=max_samples)
+        main_run_grid_search(
+            builder,
+            temperature_values=t,
+            max_depth_values=d,
+            topk_len_values=k,
+            lossy_threshold_values=e,
+            lossy_window_size_values=w,
+            max_samples=max_samples,
+        )
         
     @app.command()
     def run_benchmark(benchmarks: str = None, max_samples: int = None):

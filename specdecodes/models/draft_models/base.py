@@ -54,8 +54,17 @@ class TreeMaskCache:
         self.dtype = dtype
         self.device = device
 
+        # Build static tree_mask only when the cache length is known and large enough.
+        # Some cache implementations expose a small/non-max `max_cache_len` (e.g.,
+        # current seq len), which would make the static mask too small and cause
+        # shape mismatch errors during updates.
+        use_static = (
+            self.max_cache_len is not None
+            and int(self.max_cache_len) >= int(self.prefix_len) + int(self.sample_len)
+        )
+
         # build static tree_mask
-        if self.max_cache_len is not None:
+        if use_static:
             self.tree_mask_update_method = 'static'
             self.tree_mask_cache = torch.zeros(
                 (1, 1, self.sample_len, self.max_cache_len),
