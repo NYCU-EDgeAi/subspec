@@ -97,6 +97,8 @@ def run_common_eval(generator, tokenizer, past_key_values, draft_past_key_values
     return {
         "tput_mean": float(tput_mean),
         "tput_std": float(tput_std),
+        "tacc_mean": float(tacc_mean),
+        "tacc_std": float(tacc_std),
         "avg_draft_time": float(avg_draft_time),
         "avg_target_time": float(avg_target_time),
         "peak_memory_gib": float(peak_memory),
@@ -252,6 +254,8 @@ def run_mtbench_eval(generator, tokenizer, past_key_values, draft_past_key_value
     return {
         "tput_mean": float(tput_mean),
         "tput_std": float(tput_std),
+        "tacc_mean": float(tacc_mean),
+        "tacc_std": float(tacc_std),
         "avg_draft_time": float(avg_draft_time),
         "avg_target_time": float(avg_target_time),
         "peak_memory_gib": float(peak_memory),

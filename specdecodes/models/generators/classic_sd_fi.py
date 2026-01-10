@@ -105,19 +105,25 @@ class ClassicSDGeneratorBase(GeneratorBase):
         if not hasattr(self, 'tree_mask_update_method'):
             self.tree_mask_update_method = 'static' if max_cache_len is not None else 'dynamic'
             logging.debug(f"'max_cache_len' is {'set, uses static' if max_cache_len else 'not set, uses dynamic'} tree_mask.")
-        
+
         tree_mask = (
             torch.zeros((1, 1, max_verify_tokens, max_cache_len), device=device, dtype=torch.bool)
             if max_cache_len is not None else None
         )
         self.base_tree_mask = tree_mask
-            
         return tree_mask
 
     def _get_tree_mask(self, tree_mask_partial):
         if self.tree_mask_update_method == 'static':
             # Avoid prints in hot path; use logging if needed.
             _, _, K, D = tree_mask_partial.shape
+
+            if (
+                self.base_tree_mask is None
+                or self.base_tree_mask.shape[2] < K
+                or self.base_tree_mask.shape[3] < D
+            ):
+                return tree_mask_partial
 
             # Slice to the same shape as the partial input
             tree_mask_view = self.base_tree_mask[:, :, :K, :].clone()

@@ -151,20 +151,42 @@ class GeneratorPipelineBuilder:
         if self.cache_implementation == "static":
             if self.max_length is not None:
                 if draft_model is not None:
-                    # Additional sample tokens may cause KV-Cache tp exceed max_length
-                    # We accept this is a bit hacky relying on config to contain draft_params
-                    # but draft_params are usually available.
-                    # For compatibility, verify draft_params exists.
-                    max_verify_tokens = 0
-                    if self.draft_params:
-                        if hasattr(self.draft_params, 'max_verify_tokens'):
-                            max_verify_tokens = self.draft_params.max_verify_tokens
-                        elif hasattr(self.draft_params, 'max_sample_tokens'):
-                            max_verify_tokens = self.draft_params.max_sample_tokens
-                        elif hasattr(self.draft_params, 'num_nodes'):
-                             max_verify_tokens = self.draft_params.num_nodes + 1
-                    
-                    max_cache_len = self.max_length + max_verify_tokens
+                    # Additional speculative tokens may cause KV-cache to exceed `max_length`.
+                    # We allocate extra headroom based on draft params.
+                    def _infer_max_verify_tokens(draft_params: Any) -> int:
+                        if not draft_params:
+                            return 0
+
+                        # Support DraftParams dataclass, SimpleNamespace, or raw dict.
+                        if isinstance(draft_params, dict):
+                            if "max_verify_tokens" in draft_params and draft_params["max_verify_tokens"] is not None:
+                                return int(draft_params["max_verify_tokens"])
+                            if "max_sample_tokens" in draft_params and draft_params["max_sample_tokens"] is not None:
+                                return int(draft_params["max_sample_tokens"])
+                            if "num_nodes" in draft_params and draft_params["num_nodes"] is not None:
+                                return int(draft_params["num_nodes"]) + 1
+                            if "max_depth" in draft_params and "topk_len" in draft_params:
+                                try:
+                                    return int(draft_params["max_depth"]) * int(draft_params["topk_len"]) + 1
+                                except Exception:
+                                    return 0
+                            return 0
+
+                        if hasattr(draft_params, "max_verify_tokens") and getattr(draft_params, "max_verify_tokens") is not None:
+                            return int(getattr(draft_params, "max_verify_tokens"))
+                        if hasattr(draft_params, "max_sample_tokens") and getattr(draft_params, "max_sample_tokens") is not None:
+                            return int(getattr(draft_params, "max_sample_tokens"))
+                        if hasattr(draft_params, "num_nodes") and getattr(draft_params, "num_nodes") is not None:
+                            return int(getattr(draft_params, "num_nodes")) + 1
+                        if hasattr(draft_params, "max_depth") and hasattr(draft_params, "topk_len"):
+                            try:
+                                return int(getattr(draft_params, "max_depth")) * int(getattr(draft_params, "topk_len")) + 1
+                            except Exception:
+                                return 0
+                        return 0
+
+                    max_verify_tokens = _infer_max_verify_tokens(getattr(self, "draft_params", None))
+                    max_cache_len = int(self.max_length) + int(max_verify_tokens)
                 else:
                     max_cache_len = self.max_length
             else:

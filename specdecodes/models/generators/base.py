@@ -276,8 +276,14 @@ class GeneratorBase(nn.Module):
         finished = False
         prune_tokens = 0
 
+        # `stopping_criteria` (e.g., MaxLengthCriteria) expects to see the full
+        # generated sequence. `input_ids` already includes `sampled_tokens` when
+        # this helper is called, so we simulate the incremental growth.
+        base_len = int(input_ids.shape[1] - sampled_tokens.shape[1])
+
         for k in range(sampled_tokens.shape[1]):
-            res = stopping_criteria(sampled_tokens[:, k : k + 1], None)
+            cur_len = base_len + k + 1
+            res = stopping_criteria(input_ids[:, :cur_len], None)
             finished = bool(res.item()) if hasattr(res, "item") else bool(res)
             if finished:
                 prune_tokens = sampled_tokens.shape[1] - k - 1

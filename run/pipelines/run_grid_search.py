@@ -13,23 +13,51 @@ from specdecodes.models.utils.utils import DraftParams
 from run.pipelines.benchmarks.utils.eval import run_common_eval, run_mtbench_eval
 from run.pipelines.benchmarks.mtbench import load_mtbench_dataset
 
-def evaluate_single_param(model, draft_model, tokenizer, builder, args, dataset, log_dir, temperature, max_depth, topk_len):
+def evaluate_single_param(
+    model,
+    draft_model,
+    tokenizer,
+    builder,
+    args,
+    dataset,
+    log_dir,
+    temperature,
+    max_depth,
+    topk_len,
+    lossy_threshold=None,
+    lossy_window_size=None,
+):
     builder.draft_params = DraftParams(
         temperature=temperature,
         max_depth=max_depth,
         topk_len=topk_len,
+        lossy_threshold=float(lossy_threshold) if lossy_threshold is not None else 0.0,
+        lossy_window_size=int(lossy_window_size) if lossy_window_size is not None else 1,
     )
     generator, tokenizer, past_kv, draft_past_kv = builder.build_generator_pipeline(model, draft_model, tokenizer)
-    results = run_mtbench_eval(generator, tokenizer, past_kv, draft_past_kv, args, dataset, log_dir)
-    return results
+    return run_mtbench_eval(generator, tokenizer, past_kv, draft_past_kv, args, dataset, log_dir)
 
 
-def main(builder, temperature_values, max_depth_values, topk_len_values, max_samples=None):
+def main(
+    builder,
+    temperature_values,
+    max_depth_values,
+    topk_len_values,
+    lossy_threshold_values=None,
+    lossy_window_size_values=None,
+    max_samples=None,
+):
     # Enable profiling, disable logging profiling results
     builder.generator_profiling = True
     builder.profiling_verbose = False
+
     model, draft_model, tokenizer = builder.build_models_and_tokenizer()
     args = builder.args
+
+    # Keep a handle to the original forward methods so each config can recompile cleanly.
+    # Without this, repeated torch.compile() calls can end up wrapping an already-compiled forward.
+    base_target_forward = model.forward
+    base_draft_forward = draft_model.forward if draft_model is not None else None
     
     # Set logging level by environment variable
     LOGLEVEL = os.environ.get("LOGLEVEL", "INFO").upper()
@@ -39,7 +67,29 @@ def main(builder, temperature_values, max_depth_values, topk_len_values, max_sam
     temperature_values = [float(x) for x in temperature_values.split(",")]
     max_depth_values = [int(x) for x in max_depth_values.split(",")]
     topk_len_values = [int(x) for x in topk_len_values.split(",")]
-    logging.info(f"Candidate values: temperature={temperature_values}, max_depth={max_depth_values}, topk_len={topk_len_values}")
+
+    if lossy_threshold_values is None:
+        lossy_threshold_values = [0.0]
+    else:
+        lossy_threshold_values = [float(x) for x in str(lossy_threshold_values).split(",") if str(x).strip()]
+        if not lossy_threshold_values:
+            lossy_threshold_values = [0.0]
+
+    if lossy_window_size_values is None:
+        lossy_window_size_values = [1]
+    else:
+        lossy_window_size_values = [int(x) for x in str(lossy_window_size_values).split(",") if str(x).strip()]
+        if not lossy_window_size_values:
+            lossy_window_size_values = [1]
+
+    logging.info(
+        "Candidate values: temperature=%s, max_depth=%s, topk_len=%s, lossy_threshold=%s, lossy_window_size=%s",
+        temperature_values,
+        max_depth_values,
+        topk_len_values,
+        lossy_threshold_values,
+        lossy_window_size_values,
+    )
     
     # Handle output directories
     if args.out_dir is not None:
@@ -66,18 +116,37 @@ def main(builder, temperature_values, max_depth_values, topk_len_values, max_sam
     dataset = dataset[:num_samples]
     
     # Run benchmark
-    for temperature, max_depth, topk_len in tqdm(itertools.product(temperature_values, max_depth_values, topk_len_values), 
-                                                 total=len(temperature_values) * len(max_depth_values) * len(topk_len_values), 
-                                                 desc="Configurations", 
-                                                 leave=True):
-        logging.info(f"\nTesting DraftParams: temperature={temperature}, max_depth={max_depth}, topk_len={topk_len}")
+    combos = list(itertools.product(
+        temperature_values,
+        max_depth_values,
+        topk_len_values,
+        lossy_threshold_values,
+        lossy_window_size_values,
+    ))
+    for temperature, max_depth, topk_len, lossy_threshold, lossy_window_size in tqdm(
+        combos,
+        total=len(combos),
+        desc="Configurations",
+        leave=True,
+    ):
+        logging.info(
+            "\nTesting DraftParams: temperature=%s, max_depth=%s, topk_len=%s, lossy_threshold=%s, lossy_window_size=%s",
+            temperature,
+            max_depth,
+            topk_len,
+            lossy_threshold,
+            lossy_window_size,
+        )
         
         # fix random seed to 0 for each iteration for reproducibility
         torch.manual_seed(0)
         random.seed(0)
         
         # Handle output directories
-        log_dir = os.path.join(log_dir_base, f't{temperature}_d{max_depth}_k{topk_len}')
+        log_dir = os.path.join(
+            log_dir_base,
+            f"t{temperature}_d{max_depth}_k{topk_len}_e{lossy_threshold}_w{lossy_window_size}",
+        )
         os.makedirs(log_dir, exist_ok=True)
         logging.info(f"Log directory: {log_dir}")
         
@@ -85,9 +154,62 @@ def main(builder, temperature_values, max_depth_values, topk_len_values, max_sam
         gc.collect()
         torch.cuda.reset_peak_memory_stats()
 
+        # Each configuration can change shapes (e.g., max_verify_tokens / attention masks).
+        # Reset compile caches so torch.compile doesn't reuse shape-specialized graphs.
+        try:
+            torch.compiler.reset()
+        except Exception:
+            pass
+
+        # Be more aggressive about clearing Dynamo/Inductor caches.
+        # This keeps torch.compile enabled for speed, while ensuring each (d,k) gets
+        # a fresh compile and we don't hit shape-guard reuse issues.
+        try:
+            import torch._dynamo as dynamo  # type: ignore
+
+            dynamo.reset()
+            if hasattr(dynamo, "reset_code_caches"):
+                dynamo.reset_code_caches()
+        except Exception:
+            pass
+
+        try:
+            import torch._inductor as inductor  # type: ignore
+
+            if hasattr(inductor, "utils") and hasattr(inductor.utils, "clear_inductor_caches"):
+                inductor.utils.clear_inductor_caches()
+        except Exception:
+            pass
+
+        # Restore original forwards so torch.compile wraps a clean graph each iteration.
+        model.forward = base_target_forward
+        if draft_model is not None and base_draft_forward is not None:
+            draft_model.forward = base_draft_forward
+
         # Evaluate
         try:
-            tput_mean, tput_std, acc_rate_mean, acc_rate_std, avg_draft_time, avg_target_time, peak_mem = evaluate_single_param(model, draft_model, tokenizer, builder, args, dataset, log_dir, temperature, max_depth, topk_len)
+            results = evaluate_single_param(
+                model,
+                draft_model,
+                tokenizer,
+                builder,
+                args,
+                dataset,
+                log_dir,
+                temperature,
+                max_depth,
+                topk_len,
+                lossy_threshold,
+                lossy_window_size,
+            )
+
+            tput_mean = float(results.get("tput_mean", 0.0))
+            tput_std = float(results.get("tput_std", 0.0))
+            acc_rate_mean = float(results.get("tacc_mean", 0.0))
+            acc_rate_std = float(results.get("tacc_std", 0.0))
+            avg_draft_time = float(results.get("avg_draft_time", 0.0))
+            avg_target_time = float(results.get("avg_target_time", 0.0))
+            peak_mem = float(results.get("peak_memory_gib", 0.0))
 
         except Exception as e:
             logging.warning(f"Error during evaluation: {e}")
@@ -109,7 +231,9 @@ def main(builder, temperature_values, max_depth_values, topk_len_values, max_sam
                     "Tacc_std": f"{acc_rate_std:.3f}",
                     "avg_draft_time": f"{avg_draft_time:.3f}",
                     "avg_target_time": f"{avg_target_time:.3f}",
-                    "peak_memory": f"{peak_mem:.3f} GiB"
+                    "peak_memory": f"{peak_mem:.3f} GiB",
+                    "lossy_threshold": f"{float(lossy_threshold):.6g}",
+                    "lossy_window_size": int(lossy_window_size),
                 }
             }, f, indent=4)
             f.write("\n")
