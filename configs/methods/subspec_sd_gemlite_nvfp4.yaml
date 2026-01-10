@@ -1,0 +1,26 @@
+# SubSpec SD (v1) + target postspec offloading + draft GemLite NVFP4 dynamic (A4W4)
+method: subspec_sd
+
+llm_path: meta-llama/Llama-3.1-8B-Instruct
+
+recipe:
+  class_path: specdecodes.helpers.recipes.subspec.gemlite_postspec:Recipe
+  kwargs:
+    processor: A4W4_NVFP_dynamic
+    # Keep output head in fp16 for stability/acceptance
+    skip_modules: ["lm_head"]
+
+max_length: 4096
+cache_implementation: static
+warmup_iter: 1
+compile_mode: max-autotune
+
+generator_profiling: true
+
+generator_kwargs:
+  prefill_chunk_size: 4096
+
+draft_params:
+  temperature: 0.2
+  max_depth: 32
+  topk_len: 6
