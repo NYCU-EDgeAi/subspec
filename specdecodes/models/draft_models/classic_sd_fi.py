@@ -25,6 +25,7 @@ class ClassicSDDraftModel(DraftModelBase):
         self.postspec_count = 0
 
     def forward(self, input_ids, with_softmax=False, *model_args, **kwargs):
+        input_ids, kwargs = self._align_forward_inputs_to_model_device(input_ids, kwargs)
         logits = self.model(input_ids, *model_args, **kwargs).logits
         if with_softmax:
             logits = torch.softmax(logits/self.draft_params.temperature, dim=-1)

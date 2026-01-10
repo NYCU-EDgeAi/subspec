@@ -51,7 +51,16 @@ class SubSpecSDDraftModel(ClassicSDDraftModel):
         
         # 1) Obtain necessary parameters
         device = input_ids.device
-        dtype = self.model.lm_head.weight.dtype
+        lm_head = getattr(self.model, "lm_head", None)
+        if lm_head is not None and hasattr(lm_head, "weight"):
+            dtype = lm_head.weight.dtype
+        else:
+            # Some patched Linear replacements (e.g., GemLiteLinearTriton) may not
+            # expose a `.weight` attribute. Fall back to model parameter dtype.
+            try:
+                dtype = next(self.model.parameters()).dtype
+            except StopIteration:
+                dtype = torch.float16
         batch_size, input_len = input_ids.shape
         max_cache_len = getattr(self.past_key_values.cache, "max_cache_len", None)
         assert batch_size == 1, "Only support batch_size=1 for now."

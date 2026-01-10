@@ -205,6 +205,41 @@ class DraftModelBase(nn.Module):
     @torch.no_grad()
     def forward(self, input_ids, *model_args, **kwargs):
         raise NotImplementedError
+
+    def _infer_param_device(self, fallback: Optional[torch.device] = None) -> Optional[torch.device]:
+        try:
+            return next(self.model.parameters()).device
+        except StopIteration:
+            return fallback
+
+    def _align_forward_inputs_to_model_device(
+        self,
+        input_ids: torch.Tensor,
+        kwargs: Dict[str, object],
+        tensor_kw_keys: Tuple[str, ...] = ("position_ids", "cache_position", "attention_mask"),
+    ) -> Tuple[torch.Tensor, Dict[str, object]]:
+        """Move common forward tensors to the model's parameter device.
+
+        This is intentionally lightweight and avoids doing any `.to()` on modules,
+        so it's safe to call from torch.compile'd code.
+        """
+        if not isinstance(input_ids, torch.Tensor):
+            return input_ids, kwargs
+
+        model_device = self._infer_param_device(fallback=input_ids.device)
+        if model_device is None:
+            return input_ids, kwargs
+
+        if input_ids.device != model_device:
+            input_ids = input_ids.to(model_device, non_blocking=True)
+
+        if kwargs:
+            for key in tensor_kw_keys:
+                value = kwargs.get(key)
+                if isinstance(value, torch.Tensor) and value.device != model_device:
+                    kwargs[key] = value.to(model_device, non_blocking=True)
+
+        return input_ids, kwargs
     
     @torch.no_grad()
     def speculate(self, input_ids, past_key_values, **kwargs):
