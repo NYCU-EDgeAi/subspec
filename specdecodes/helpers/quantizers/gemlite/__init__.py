@@ -88,7 +88,7 @@ class GemliteQuantizer:
           - On RTX 5090, GemLite ships tuned configs and may auto-load them.
         """
 
-        processor_name = str(quant_config.get("processor") or os.environ.get("SUBSPEC_GEMLITE_PROCESSOR") or "A4W4_NVFP_dynamic")
+        processor_name = str(quant_config.get("processor") or "A4W4_NVFP_dynamic")
         skip_modules = quant_config.get("skip_modules")
         if skip_modules is None:
             skip_modules = []
