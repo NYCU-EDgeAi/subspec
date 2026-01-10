@@ -259,6 +259,22 @@ class GeneratorPipelineBuilder:
         """
         Compile the generator's forward methods.
         """
+        def _align_llama_rope_buffers_to_device(model, device: torch.device) -> None:
+            llama_model = getattr(model, "model", None)
+            rotary_emb = getattr(llama_model, "rotary_emb", None)
+            if rotary_emb is None:
+                return
+
+            # Move registered buffers (e.g., inv_freq) to the parameter device.
+            for name, buf in rotary_emb.named_buffers(recurse=False):
+                if isinstance(buf, torch.Tensor) and buf.device != device:
+                    rotary_emb._buffers[name] = buf.to(device, non_blocking=True)
+
+            # Some HF versions expose inv_freq as an attribute in addition to being a buffer.
+            inv_freq = getattr(rotary_emb, "inv_freq", None)
+            if isinstance(inv_freq, torch.Tensor) and inv_freq.device != device:
+                rotary_emb.inv_freq = inv_freq.to(device, non_blocking=True)
+
         if not hasattr(torch, "compile"):
             raise RuntimeError(
                 "compile_mode is set but torch.compile is unavailable. "
@@ -281,6 +297,15 @@ class GeneratorPipelineBuilder:
 
         # Compile draft model if it exists
         if getattr(generator, 'draft_model', None) is not None:
+            try:
+                draft_param_device = next(generator.draft_model.model.parameters()).device
+            except StopIteration:
+                draft_param_device = None
+
+            if draft_param_device is not None:
+                # Align HF RoPE buffers pre-compile to avoid implicit DeviceCopy ops in graphs.
+                _align_llama_rope_buffers_to_device(generator.draft_model.model, draft_param_device)
+
             generator.draft_model.forward = torch.compile(
                 generator.draft_model.forward,
                 mode=self.compile_mode,

@@ -5,7 +5,7 @@ datasets==3.6.0
 nvtx==0.2.11
 typer==0.15.4
 hqq==0.2.6
-gemlite==0.4.6
+gemlite==0.5.1.post1
 smolagents==1.22.0
 pytest
 pyyaml
