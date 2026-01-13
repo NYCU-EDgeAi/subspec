@@ -1,31 +1,18 @@
 import torch
 from transformers.generation.logits_process import LogitsProcessorList
 from transformers.generation.stopping_criteria import StoppingCriteria
-import logging
 import nvtx
 
-from .base import GeneratorBase
+from .classic_sd import ClassicSDGeneratorBase as ClassicSDBase
 from ..utils.mixin import SDProfilingMixin
-from ..utils.utils import DraftParams, invert_mask
-from ..utils.tree_verify import verify_tree
 from ..utils.flashinfer.cache_manager import (
-    KvCachePool,
-    KvCacheBatchPosition,
     RequestKvCache,
     getKvCacheBatchPosition,
-    FlashInferCache
 )
 from ..utils.flashinfer.attention_wrapper import FlashinferAttentionWrapper
 from ..utils.flashinfer.prefill import flashinfer_chunked_prefill
 
-class ClassicSDGeneratorBase(GeneratorBase):
-    def __init__(self, generator_kwargs, *model_args, **kwargs):
-        super().__init__(*model_args, **kwargs)
-
-        # Then handle generator-specific kwargs here
-        self.generator_kwargs = generator_kwargs or {}
-        self.prefill_chunk_size = self.generator_kwargs.get("prefill_chunk_size", None)
-
+class ClassicSDGeneratorBase(ClassicSDBase):
     def init_cuda_graph_runner(self,device,kvCachePool=None):
         """
         Initialize the draft model CUDA-graph runner (FlashInfer path only).
@@ -34,27 +21,20 @@ class ClassicSDGeneratorBase(GeneratorBase):
             self.draft_model.init_cuda_graph_runner(device=device)
 
     def _tree_decoding(self, tree, request_kv_cache, position_offset, cache_position, device):
-        # Preparing target_model's tree decoding data, also updates each node's index (node.ind).
-        with nvtx.annotate("attn_mask/build"):
-            node_data = tree.get_tree_data()
-            tree_input_ids = node_data['token_ids']
-            tree_position_ids = node_data['depths'] + position_offset
-            tree_mask_partial = tree.create_attention_mask(position_offset)
-        
-        # Move to device
-        with nvtx.annotate("attn_mask/to_device"):
-            tree_input_ids = tree_input_ids.to(device, non_blocking=True)
-            tree_position_ids = tree_position_ids.to(device, non_blocking=True)
-            tree_mask_partial = tree_mask_partial.to(device)
-        
-        # Assign to tree mask
-        with nvtx.annotate("attn_mask/prepare"):
-            tree_mask = self._get_tree_mask(tree_mask_partial)
+        kv_cache_pool = request_kv_cache.kvCachePool
+        tree_input_ids, tree_position_ids, tree_mask = self._prepare_tree_inputs_and_mask(
+            tree,
+            position_offset=position_offset,
+            device=device,
+            model_dtype=kv_cache_pool.cache_data[0].dtype,
+            non_blocking=True,
+            invert=False,
+        )
                
         # Target model forward
         with nvtx.annotate("target_forward", color="red"):
             num_tokens = self.draft_params.max_verify_tokens
-            kvCachePool = request_kv_cache.kvCachePool
+            kvCachePool = kv_cache_pool
             
             request_kv_cache.increment(num_tokens)
 
@@ -99,66 +79,6 @@ class ClassicSDGeneratorBase(GeneratorBase):
             request_kv_cache=request_kv_cache,
             flashinferWrapper=self.flashinferWrapper,
         )
-    
-    def _init_tree_mask(self, max_verify_tokens, max_cache_len=None, device='cpu'):
-        if not hasattr(self, 'tree_mask_update_method'):
-            self.tree_mask_update_method = 'static' if max_cache_len is not None else 'dynamic'
-            logging.debug(f"'max_cache_len' is {'set, uses static' if max_cache_len else 'not set, uses dynamic'} tree_mask.")
-
-        tree_mask = (
-            torch.zeros((1, 1, max_verify_tokens, max_cache_len), device=device, dtype=torch.bool)
-            if max_cache_len is not None else None
-        )
-        self.base_tree_mask = tree_mask
-        return tree_mask
-
-    def _get_tree_mask(self, tree_mask_partial):
-        if self.tree_mask_update_method == 'static':
-            # Avoid prints in hot path; use logging if needed.
-            _, _, K, D = tree_mask_partial.shape
-
-            if (
-                self.base_tree_mask is None
-                or self.base_tree_mask.shape[2] < K
-                or self.base_tree_mask.shape[3] < D
-            ):
-                return tree_mask_partial
-
-            # Slice to the same shape as the partial input
-            tree_mask_view = self.base_tree_mask[:, :, :K, :].clone()
-            tree_mask_view[:, :, :K, :D] = tree_mask_partial
-
-            # Return view with the correct shape
-            return tree_mask_view
-        else:
-            return tree_mask_partial
-
-    def _verify_step(self, p, token_ids, logits_processor, do_sample):
-        sampled_token_id = p.argmax() if not do_sample else p.multinomial(1).squeeze(-1)
-        if torch.any(sampled_token_id == token_ids):
-            return sampled_token_id, None
-        else:
-            return None, sampled_token_id
-        
-    def _verify(self, tree, root_ind ,logits, logits_processor, do_sample,skip_nodes=0):
-        generator_kwargs = getattr(self, "generator_kwargs", {}) or {}
-        verify_method = str(generator_kwargs.get("verify_method", "exact") or "exact").strip().lower()
-        verify_kwargs = dict(generator_kwargs.get("verify_kwargs") or {})
-
-        return verify_tree(
-            tree=tree,
-            root_ind=int(root_ind),
-            logits=logits,
-            sample_token_fn=self._sample_token,
-            verify_step_fn=self._verify_step,
-            eos_token_id=getattr(self.draft_model, "eos_token_id", None),
-            logits_processor=logits_processor,
-            do_sample=do_sample,
-            skip_nodes=int(skip_nodes),
-            verify_method=verify_method,
-            verify_kwargs=verify_kwargs,
-        )
-
 
     def _generate(
         self,
@@ -267,11 +187,13 @@ class ClassicSDGeneratorBase(GeneratorBase):
 
                 with nvtx.annotate("verify"):
                     root_ind = 0
-                    sampled_tokens, hidden_indices, (total_len, accept_len) = self._verify(
-                                                            tree, root_ind, next_token_logits, 
-                                                            logits_processor,
-                                                            do_sample
-                                                        )
+                    sampled_tokens, hidden_indices, _ = self._verify(
+                        tree,
+                        root_ind,
+                        next_token_logits,
+                        logits_processor,
+                        do_sample,
+                    )
                     sampled_tokens = sampled_tokens.to(input_ids.device)
                     del next_token_logits
                     

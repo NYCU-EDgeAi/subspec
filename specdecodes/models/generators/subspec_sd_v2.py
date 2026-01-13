@@ -5,29 +5,18 @@ import nvtx
 
 from .classic_sd import ClassicSDGeneratorBase
 from ..utils.mixin import SDProfilingMixin
-from ..utils.utils import DraftParams, invert_mask
-from concurrent.futures import ThreadPoolExecutor, wait, FIRST_EXCEPTION
 
 
 class SubSpecSDGeneratorBase(ClassicSDGeneratorBase):
     def _draft_tree_decoding(self, tree, past_key_values, position_offset, cache_position, skip_nodes, device):
-        # Preparing draft_model's tree decoding data, also updates each node's index (node.ind).
-        with nvtx.annotate("attn_mask/build"):
-            node_data = tree.get_tree_data(skip_nodes)
-            tree_input_ids = node_data['token_ids']
-            tree_position_ids = node_data['depths'] + position_offset
-            tree_mask_partial = tree.create_attention_mask(position_offset, skip_nodes)
-          
-        # Move to device
-        with nvtx.annotate("attn_mask/to_device"):
-            tree_input_ids = tree_input_ids.to(device)
-            tree_position_ids = tree_position_ids.to(device)
-            tree_mask_partial = tree_mask_partial.to(device)
-        
-        # Assign to tree mask
-        with nvtx.annotate("attn_mask/prepare"):
-            tree_mask = self._get_tree_mask(tree_mask_partial)
-            tree_mask = invert_mask(tree_mask, dtype=self.draft_model.model.dtype)
+        tree_input_ids, tree_position_ids, tree_mask = self._prepare_tree_inputs_and_mask(
+            tree,
+            position_offset=position_offset,
+            device=device,
+            model_dtype=self.draft_model.model.dtype,
+            skip_nodes=skip_nodes,
+            invert=True,
+        )
         
         # Draft model forward
         with nvtx.annotate("draft_forward", color="red"):
@@ -42,18 +31,20 @@ class SubSpecSDGeneratorBase(ClassicSDGeneratorBase):
     
     def _post_verify(self, tree, root_ind, past_key_values, position_offset, cache_position, last_tree_depth, skip_nodes, logits_processor, device):
         next_token_logits = self._draft_tree_decoding(tree, past_key_values, position_offset=position_offset, cache_position=cache_position, skip_nodes=skip_nodes, device=device)
-        sampled_tokens, _, (total_len, sampled_len) = self._verify(
-                                                tree, root_ind, next_token_logits, 
-                                                logits_processor,
-                                                False, 
-                                                skip_nodes=skip_nodes,
-                                            )
+        sampled_tokens, _, _ = self._verify(
+            tree,
+            root_ind,
+            next_token_logits,
+            logits_processor,
+            False,
+            skip_nodes=skip_nodes,
+        )
 
-        keep_tokens = sampled_tokens.size(1)
-        tree.prune_to_depth(last_tree_depth+keep_tokens)
+        accepted_len = sampled_tokens.size(1)
+        tree.prune_to_depth(last_tree_depth + accepted_len)
         
         # # speculate to refill the tree
-        refill_steps = self.draft_params.max_depth - keep_tokens
+        refill_steps = self.draft_params.max_depth - accepted_len
         if refill_steps > 0:
             with nvtx.annotate("postspec_refill", color="cyan"):
                 self.draft_model.init_postspec()
@@ -64,23 +55,18 @@ class SubSpecSDGeneratorBase(ClassicSDGeneratorBase):
         return tree
 
     def _tree_decoding(self, tree, past_key_values, position_offset, cache_position, skip_nodes, device):
-        # Preparing target_model's tree decoding data, also updates each node's index (node.ind).
-        with nvtx.annotate("attn_mask/build"):
-            node_data = tree.get_tree_data(skip_nodes)
-            tree_input_ids = node_data['token_ids']
-            tree_position_ids = node_data['depths'] + position_offset
-            tree_mask_partial = tree.create_attention_mask(position_offset, skip_nodes)
-          
-        # Move to device
-        with nvtx.annotate("attn_mask/to_device"):
-            tree_input_ids = tree_input_ids.to(device)
-            tree_position_ids = tree_position_ids.to(device)
-            tree_mask_partial = tree_mask_partial.to(device)
-        
-        # Assign to tree mask
-        with nvtx.annotate("attn_mask/prepare"):
-            tree_mask = self._get_tree_mask(tree_mask_partial)
-            tree_mask = invert_mask(tree_mask, dtype=self.target_model.model.dtype)
+        # Disable draft profiling during target forward
+        if self.profiling:
+            self.profile_draft_time = False
+
+        tree_input_ids, tree_position_ids, tree_mask = self._prepare_tree_inputs_and_mask(
+            tree,
+            position_offset=position_offset,
+            device=device,
+            model_dtype=self.target_model.model.dtype,
+            skip_nodes=skip_nodes,
+            invert=True,
+        )
         
         # Target model forward
         with nvtx.annotate("target_forward", color="red"):
@@ -91,6 +77,9 @@ class SubSpecSDGeneratorBase(ClassicSDGeneratorBase):
                 position_ids=tree_position_ids.unsqueeze(0),
                 cache_position=cache_position
             )
+            
+        if self.profiling:
+            self.profile_draft_time = True
         return outputs
     
     def _generate(
@@ -180,9 +169,14 @@ class SubSpecSDGeneratorBase(ClassicSDGeneratorBase):
 
             while not finished:
                 if is_prev_accepted:
-                    self.post_verify_count += 1
+                    # self.post_verify_count += 1
                     skip_nodes = last_tree_size
-                    cache_position = torch.arange(position_offset+last_tree_size, position_offset+tree.size(), dtype=torch.long, device=input_ids.device)
+                    cache_position = torch.arange(
+                        position_offset + last_tree_size,
+                        position_offset + tree.size(),
+                        dtype=torch.long,
+                        device=input_ids.device,
+                    )
                     with nvtx.annotate("post_verify", color="cyan"):
                         tree = self._post_verify(tree, root_ind, past_key_values, position_offset, cache_position, last_tree_depth, skip_nodes, logits_processor, input_ids.device)
 
@@ -207,7 +201,12 @@ class SubSpecSDGeneratorBase(ClassicSDGeneratorBase):
                     
                     skip_nodes = 0
                     position_offset = input_ids.shape[1] - 1
-                    cache_position = torch.arange(position_offset, position_offset+tree.size(), dtype=torch.long, device=input_ids.device)
+                    cache_position = torch.arange(
+                        position_offset,
+                        position_offset + tree.size(),
+                        dtype=torch.long,
+                        device=input_ids.device,
+                    )
                         
                 with nvtx.annotate("target_decode", color="orange"):
                     self.draft_model.init_postspec()
@@ -219,12 +218,14 @@ class SubSpecSDGeneratorBase(ClassicSDGeneratorBase):
                 
                 with nvtx.annotate("verify"):
                     root_ind = root_ind if is_prev_accepted else 0
-                    sampled_tokens, hidden_indices, (total_len, sampled_len) = self._verify(
-                                                            tree, root_ind, next_token_logits, 
-                                                            logits_processor,
-                                                            do_sample, 
-                                                            skip_nodes=skip_nodes,
-                                                        )
+                    sampled_tokens, hidden_indices, _ = self._verify(
+                        tree,
+                        root_ind,
+                        next_token_logits,
+                        logits_processor,
+                        do_sample,
+                        skip_nodes=skip_nodes,
+                    )
                     
                     last_accepted_ind = hidden_indices[-1]
                     bonus_token = sampled_tokens[:, -1].item()

@@ -6,7 +6,6 @@ import nvtx
 
 from .classic_sd import ClassicSDGeneratorBase
 from ..utils.mixin import SDProfilingMixin
-from ..utils.utils import DraftParams, invert_mask
 from ..utils.flashinfer.cache_manager import (
     KvCachePool,
     KvCacheBatchPosition,
@@ -29,22 +28,14 @@ class SubSpecSDGeneratorBase(ClassicSDGeneratorBase):
             self.draft_model.init_cuda_graph_runner(device=device)
 
     def _tree_decoding(self, tree, request_kv_cache, position_offset, cache_position, device):
-        # Preparing target_model's tree decoding data, also updates each node's index (node.ind).
-        with nvtx.annotate("attn_mask/build"):
-            node_data = tree.get_tree_data()
-            tree_input_ids = node_data['token_ids']
-            tree_position_ids = node_data['depths'] + position_offset
-            tree_mask_partial = tree.create_attention_mask(position_offset)
-        
-        # Move to device
-        with nvtx.annotate("attn_mask/to_device"):
-            tree_input_ids = tree_input_ids.to(device, non_blocking=True)
-            tree_position_ids = tree_position_ids.to(device, non_blocking=True)
-            tree_mask_partial = tree_mask_partial.to(device)
-        
-        # Assign to tree mask
-        with nvtx.annotate("attn_mask/prepare"):
-            tree_mask = self._get_tree_mask(tree_mask_partial)
+        tree_input_ids, tree_position_ids, tree_mask = self._prepare_tree_inputs_and_mask(
+            tree,
+            position_offset=position_offset,
+            device=device,
+            model_dtype=self.target_model.model.dtype,
+            non_blocking=True,
+            invert=False,
+        )
                
         # Target model forward
         with nvtx.annotate("target_forward", color="red"):

@@ -54,6 +54,7 @@ class SDProfilingMixin:
         self.out_dir = out_dir
         self.prefix = prefix
         self.profiling_verbose = profiling_verbose
+        self.profile_draft_time = getattr(self, "profile_draft_time", True)
         
         self.profile_data = {}
         self.sampled_count = 1 # assume first token is sampled (prefill stage)
@@ -82,7 +83,7 @@ class SDProfilingMixin:
         return root
         
     def _speculate(self, *model_args, **kwargs):
-        if not self.profiling:
+        if not self.profiling or not self.profile_draft_time:
             return super()._speculate(*model_args, **kwargs)
         
         start_event = torch.cuda.Event(enable_timing=True)
@@ -157,11 +158,15 @@ class SDProfilingMixin:
 
         # Compute total time for draft iterations
         draft_time_total_ms = 0.0
-        for (start_event, end_event) in self.draft_events:
-            draft_time_total_ms += start_event.elapsed_time(end_event)  # returns time in ms
+        draft_event_count = 0
+        if self.profile_draft_time:
+            for (start_event, end_event) in self.draft_events:
+                draft_time_total_ms += start_event.elapsed_time(end_event)  # returns time in ms
+            draft_event_count = len(self.draft_events)
         
         # Compute total time for post-verify iterations
         post_verify_time_total_ms = 0.0
+        post_verify_event_count = len(self.post_verify_events)
         for (start_event, end_event) in self.post_verify_events:
             post_verify_time_total_ms += start_event.elapsed_time(end_event)  # returns time in ms
 
@@ -176,7 +181,8 @@ class SDProfilingMixin:
             verify_time_total_ms += start_event.elapsed_time(end_event)
 
         # Average times (in milliseconds)
-        draft_avg_ms = (draft_time_total_ms+post_verify_time_total_ms) / max(len(self.draft_events), 1)
+        draft_denominator = draft_event_count + post_verify_event_count
+        draft_avg_ms = (draft_time_total_ms + post_verify_time_total_ms) / max(draft_denominator, 1)
         target_avg_ms = target_time_total_ms / max(len(self.target_events), 1)
         verify_avg_ms = verify_time_total_ms / max(len(self.verify_events), 1)
 

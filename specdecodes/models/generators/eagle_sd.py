@@ -5,7 +5,7 @@ import nvtx
 
 from .classic_sd import ClassicSDGeneratorBase
 from ..utils.mixin import SDProfilingMixin
-from ..utils.utils import DraftParams, invert_mask
+from ..utils.utils import invert_mask
 
 
 class EagleSDGeneratorBase(ClassicSDGeneratorBase):
@@ -16,23 +16,13 @@ class EagleSDGeneratorBase(ClassicSDGeneratorBase):
         )
 
     def _tree_decoding(self, tree, past_key_values, position_offset, cache_position, device):
-        # Preparing target_model's tree decoding data, also updates each node's index (node.ind).
-        with nvtx.annotate("attn_mask/build"):
-            node_data = tree.get_tree_data()
-            tree_input_ids = node_data['token_ids']
-            tree_position_ids = node_data['depths'] + position_offset
-            tree_mask_partial = tree.create_attention_mask(position_offset)
-        
-        # Move to device
-        with nvtx.annotate("attn_mask/to_device"):
-            tree_input_ids = tree_input_ids.to(device)
-            tree_position_ids = tree_position_ids.to(device)
-            tree_mask_partial = tree_mask_partial.to(device)
-        
-        # Assign to tree mask
-        with nvtx.annotate("attn_mask/prepare"):
-            tree_mask = self._get_tree_mask(tree_mask_partial)
-            tree_mask = invert_mask(tree_mask, dtype=self.target_model.model.dtype)
+        tree_input_ids, tree_position_ids, tree_mask = self._prepare_tree_inputs_and_mask(
+            tree,
+            position_offset=position_offset,
+            device=device,
+            model_dtype=self.target_model.model.dtype,
+            invert=True,
+        )
         
         # Target model forward
         with nvtx.annotate("target_forward", color="red"):
@@ -146,11 +136,13 @@ class EagleSDGeneratorBase(ClassicSDGeneratorBase):
 
                 with nvtx.annotate("verify"):
                     root_ind = 0
-                    sampled_tokens, hidden_indices, (total_len, accept_len) = self._verify(
-                                                        tree, root_ind, next_token_logits, 
-                                                        logits_processor,
-                                                        do_sample
-                                                    )
+                    sampled_tokens, hidden_indices, _ = self._verify(
+                        tree,
+                        root_ind,
+                        next_token_logits,
+                        logits_processor,
+                        do_sample,
+                    )
                     
                     sampled_tokens = sampled_tokens.to(input_ids.device)
                     hidden_indices = hidden_indices.to(hidden_states.device)
