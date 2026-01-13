@@ -29,5 +29,5 @@ generator_kwargs:
 
 draft_params:
   temperature: 0.2
-  max_depth: 24
+  max_depth: 32
   topk_len: 6

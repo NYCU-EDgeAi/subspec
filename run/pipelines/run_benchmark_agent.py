@@ -48,7 +48,7 @@ def main(builder, benchmarks=None, max_samples=None):
         os.makedirs(args.out_dir, exist_ok=True)
         
     # Run benchmarks
-    log_dir_base = os.path.join(args.log_dir, time.strftime("%Y%m%d-%H%M%S"))
+    log_dir_base = os.path.join(args.log_dir, time.strftime("%Y%m%d-%H%M%S"), "run_benchmark_agent")
     for bench_name in tqdm(bench_list, desc="Running benchmarks"):
         # fix random seed to 0 for each benchmark for reproducibility
         torch.manual_seed(0)
@@ -87,7 +87,7 @@ def main(builder, benchmarks=None, max_samples=None):
         os.makedirs(args.out_dir, exist_ok=True)
         
     # Run benchmarks
-    log_dir_base = os.path.join(args.log_dir, time.strftime("%Y%m%d-%H%M%S"))
+    log_dir_base = os.path.join(args.log_dir, time.strftime("%Y%m%d-%H%M%S"), "run_benchmark_agent")
     for bench_name in tqdm(bench_list, desc="Running benchmarks"):
         # fix random seed to 0 for each benchmark for reproducibility
         torch.manual_seed(0)

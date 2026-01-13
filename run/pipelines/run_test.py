@@ -5,6 +5,9 @@ import logging
 import os
 import nvtx
 import random
+import time
+import json
+from specdecodes.models.utils.wandb_logger import wandb_logger
 from run.pipelines.utils.eval_utils import reset_kv, maybe_init_cuda_graph_runner
 
 def main(builder):
@@ -67,6 +70,25 @@ def main(builder):
     
     total_time_s = start_event.elapsed_time(end_event) / 1000.0
     output = generator.tokenizer.decode(output_ids[0][input_ids.shape[1]:])
+
+    # Persist a single-run log (mirrors benchmark JSONL style).
+    log_dir = os.path.join(args.log_dir, time.strftime("%Y%m%d-%H%M%S"), "run_test")
+    os.makedirs(log_dir, exist_ok=True)
+    log_file = os.path.join(log_dir, "0.jsonl")
+    exp_log = {
+        **wandb_logger.log_data,
+        "input_message": input_message,
+        "prompt": prompt,
+        "response": output,
+        "elapsed_time": float(total_time_s),
+        "n_prompt_tokens": int(input_ids.shape[1]),
+        "n_output_tokens": int(output_ids.shape[1] - input_ids.shape[1]),
+        "peak_memory": float(torch.cuda.max_memory_reserved(args.device) / (1024**3)),
+    }
+    with open(log_file, "a+", encoding="utf-8") as f:
+        json.dump(exp_log, f, indent=4)
+        f.write("\n")
+    print(f"Log directory: {log_dir}")
 
     if args.print_message:
         print("\nPrompt:")

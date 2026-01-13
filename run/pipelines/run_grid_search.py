@@ -109,7 +109,7 @@ def main(
     
     # Handle log directories
     log_dir_base = os.path.join(args.log_dir, "draft_params")
-    log_dir_base = os.path.join(log_dir_base, time.strftime("%Y%m%d-%H%M%S"))
+    log_dir_base = os.path.join(log_dir_base, time.strftime("%Y%m%d-%H%M%S"), "run_grid_search")
     os.makedirs(log_dir_base, exist_ok=True)
         
     # Prepare the benchmark dataset (mt_bench)

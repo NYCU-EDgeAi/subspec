@@ -11,12 +11,9 @@ def run_app(builder):
             python custom.py run-test
         """
         from run.pipelines.run_test import main as main_run_test
-        # torch.cuda.memory._record_memory_history()
         
         main_run_test(builder)
         
-        # torch.cuda.memory._dump_snapshot("my_snapshot.pickle")
-        # torch.cuda.memory._record_memory_history(enabled=None)
     
     @app.command()
     def run_agent_test():

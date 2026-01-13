@@ -16,7 +16,6 @@ class ClassicSDGeneratorBase(GeneratorBase):
 
     def _tree_decoding(self, draft_ids, cache_position, past_key_values):
         # Target model forward
-        # NOTE: Some squeeze/unsqueeze is legacy for shape alignment.
         with nvtx.annotate("target_forward", color="red"):
             outputs = self.target_model(
                 draft_ids,
@@ -71,12 +70,10 @@ class ClassicSDGeneratorBase(GeneratorBase):
         assert self.draft_model is not None, "draft_model must be provided"
         assert self.tokenizer is not None, "tokenizer must be provided"
 
-        # * clone input_ids 
         input_ids = input_ids.clone()
         batch_size, org_input_len = input_ids.shape
         assert batch_size == 1, "Only support batch_size=1 for now."
 
-        # * prepare kv-cache
         # Raise error if max_length not set while using static cache
         if stopping_criteria.max_length is None:
             if self.cache_implementation == "static":
@@ -96,7 +93,6 @@ class ClassicSDGeneratorBase(GeneratorBase):
 
         stream_callback = model_kwargs.get("stream_callback", None)
         
-        # * prefill stage
         with nvtx.annotate("prefill_chunked", color="orange"):
             outputs = self._chunked_prefill_forward(
                 input_ids,
@@ -118,7 +114,6 @@ class ClassicSDGeneratorBase(GeneratorBase):
         with nvtx.annotate("decode_loop"):
             finished = False
             while not finished:
-                # * speculate
                 with nvtx.annotate("speculate", color="cyan"):
                     input_ids = input_ids.clone(memory_format=torch.contiguous_format)
                     draft_ids = self._speculate(input_ids)
@@ -126,14 +121,12 @@ class ClassicSDGeneratorBase(GeneratorBase):
                         _, input_len = input_ids.shape
                         draft_past_key_values.crop(input_len)
 
-                # * tree decoding
                 with nvtx.annotate("target_decode", color="orange"):
                     prev_kv_len = past_key_values.get_seq_length()
                     outputs = self._tree_decoding(draft_ids, cache_position, past_key_values)
                     next_token_logits = outputs.logits
                     del outputs
 
-                # * verify
                 with nvtx.annotate("verify"):
                     root_ind = 0
                     sampled_tokens, hidden_indices, (total_len, accept_len) = self._verify(
@@ -143,12 +136,10 @@ class ClassicSDGeneratorBase(GeneratorBase):
                                                     )
                     del next_token_logits
                     
-                # * update input_ids and cache_position
                 with nvtx.annotate("state_update"):
                     input_ids = torch.cat([input_ids, sampled_tokens], dim=-1)
                     cache_position += sampled_tokens.shape[1]
                 
-                # * check stopping criteria
                 with nvtx.annotate("stop_check"):
                     finished, input_ids, kept, prune_tokens = self._apply_tokenwise_stopping_criteria(
                         input_ids=input_ids,

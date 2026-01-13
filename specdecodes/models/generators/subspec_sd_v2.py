@@ -83,7 +83,6 @@ class SubSpecSDGeneratorBase(ClassicSDGeneratorBase):
             tree_mask = invert_mask(tree_mask, dtype=self.target_model.model.dtype)
         
         # Target model forward
-        # NOTE: Some squeeze/unsqueeze is legacy for shape alignment.
         with nvtx.annotate("target_forward", color="red"):
             outputs = self.target_model(
                 tree_input_ids.unsqueeze(0),
@@ -124,12 +123,10 @@ class SubSpecSDGeneratorBase(ClassicSDGeneratorBase):
         assert self.draft_model is not None, "draft_model must be provided"
         assert self.tokenizer is not None, "tokenizer must be provided"
 
-        # * clone input_ids 
         input_ids = input_ids.clone()
         batch_size, org_input_len = input_ids.shape
         assert batch_size == 1, "Only support batch_size=1 for now."                                    
 
-        # * prepare kv-cache
         # Raise error if max_length not set while using static cache
         if stopping_criteria.max_length is None:
             if self.cache_implementation == "static":
@@ -147,7 +144,6 @@ class SubSpecSDGeneratorBase(ClassicSDGeneratorBase):
 
         stream_callback = model_kwargs.get("stream_callback", None)
 
-        # * prefill stage
         with nvtx.annotate("prefill_chunked", color="orange"):
             self._init_tree_mask(
                 self.draft_params.max_verify_tokens*2, max_cache_len, device=input_ids.device
@@ -183,7 +179,6 @@ class SubSpecSDGeneratorBase(ClassicSDGeneratorBase):
             last_tree_depth = 0
 
             while not finished:
-                # * speculate only if not previous accepted
                 if is_prev_accepted:
                     self.post_verify_count += 1
                     skip_nodes = last_tree_size
@@ -214,7 +209,6 @@ class SubSpecSDGeneratorBase(ClassicSDGeneratorBase):
                     position_offset = input_ids.shape[1] - 1
                     cache_position = torch.arange(position_offset, position_offset+tree.size(), dtype=torch.long, device=input_ids.device)
                         
-                # * tree decoding
                 with nvtx.annotate("target_decode", color="orange"):
                     self.draft_model.init_postspec()
                     outputs = self._tree_decoding(tree, past_key_values, position_offset=position_offset, cache_position=cache_position, skip_nodes=skip_nodes, device=input_ids.device)
@@ -223,7 +217,6 @@ class SubSpecSDGeneratorBase(ClassicSDGeneratorBase):
                 with nvtx.annotate("postspec_update", color="cyan"):
                     tree = self.draft_model.update_tree_after_post()
                 
-                # * verify
                 with nvtx.annotate("verify"):
                     root_ind = root_ind if is_prev_accepted else 0
                     sampled_tokens, hidden_indices, (total_len, sampled_len) = self._verify(
@@ -251,7 +244,6 @@ class SubSpecSDGeneratorBase(ClassicSDGeneratorBase):
 
                 input_ids = torch.cat([input_ids, sampled_tokens], dim=-1)
                 
-                # * check stopping criteria
                 with nvtx.annotate("stop_check"):
                     finished, input_ids, kept, prune_tokens = self._apply_tokenwise_stopping_criteria(
                         input_ids=input_ids,

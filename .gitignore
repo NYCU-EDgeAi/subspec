@@ -169,3 +169,5 @@ output
 experiments
 old
 .ignore/
+
+*notebooks/

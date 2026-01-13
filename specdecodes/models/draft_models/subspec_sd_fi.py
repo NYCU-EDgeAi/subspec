@@ -199,7 +199,6 @@ class SubSpecSDDraftModel(DraftModelBase):
         self.request_kv_cache = request_kv_cache
         
         max_cache_len = None
-        # self.flashinferWrapper = kwargs["flashinferWrapper"]
         if not hasattr(self, 'flashinferWrapper'):
             self.flashinferWrapper = FlashinferAttentionWrapper(
                 self.model.config.num_attention_heads, self.model.config.num_key_value_heads, self.model.config.hidden_size,request_kv_cache.kvCachePool.page_len
@@ -241,7 +240,6 @@ class SubSpecSDDraftModel(DraftModelBase):
             sampled_probs = self(
                 input_ids,
                 with_softmax=True,
-                # use_cache=False,
                 logits_to_keep=1,
                 position_ids = position_ids,
                 kvCachePool=request_kv_cache.kvCachePool,
@@ -344,7 +342,7 @@ class SubSpecSDDraftModel(DraftModelBase):
     def postspec(self):
         if not self.had_first_speculate:
             return
-        if self.postspec_count > (self.post_draft_params.max_depth - 1):
+        if self.postspec_count > (self.draft_params.max_depth - 1):
             return
         with nvtx.annotate("postspec_step", color="blue"):
             self.speculate_once()

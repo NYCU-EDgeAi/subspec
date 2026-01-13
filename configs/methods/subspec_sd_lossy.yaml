@@ -23,7 +23,7 @@ generator_kwargs:
   verify_kwargs:
     # Probability threshold on target distribution for accepting a non-matching draft child.
     # Lossy accept is allowed only when probs[parent, draft_token] >= threshold.
-    threshold: 0.3
+    threshold: 0.2
     # Require at least this many future locally-correct nodes (lookahead).
     window_size: 6
 

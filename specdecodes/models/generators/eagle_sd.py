@@ -35,7 +35,6 @@ class EagleSDGeneratorBase(ClassicSDGeneratorBase):
             tree_mask = invert_mask(tree_mask, dtype=self.target_model.model.dtype)
         
         # Target model forward
-        # NOTE: Some squeeze/unsqueeze is legacy for shape alignment.
         with nvtx.annotate("target_forward", color="red"):
             outputs = self.target_model(
                 tree_input_ids.unsqueeze(0),
@@ -84,12 +83,10 @@ class EagleSDGeneratorBase(ClassicSDGeneratorBase):
         assert self.draft_model is not None, "draft_model must be provided"
         assert self.tokenizer is not None, "tokenizer must be provided"
 
-        # * clone input_ids 
         input_ids = input_ids.clone()
         batch_size, org_input_len = input_ids.shape
         assert batch_size == 1, "Only support batch_size=1 for now."
 
-        # * prepare kv-cache
         # Raise error if max_length not set while using static cache
         if stopping_criteria.max_length is None:
             if self.cache_implementation == "static":
@@ -108,7 +105,6 @@ class EagleSDGeneratorBase(ClassicSDGeneratorBase):
 
         stream_callback = model_kwargs.get("stream_callback", None)
         
-        # * prefill stage
         with nvtx.annotate("prefill_chunked", color="orange"):
             self._init_tree_mask(
                 self.draft_params.max_verify_tokens, max_cache_len, device=input_ids.device
@@ -135,14 +131,12 @@ class EagleSDGeneratorBase(ClassicSDGeneratorBase):
         with nvtx.annotate("decode_loop"):
             finished = False
             while not finished:
-                # * speculate
                 with nvtx.annotate("speculate", color="cyan"):
                     tree = self._speculate(input_ids, hidden_states)
                     if self.cache_implementation == 'dynamic':
                         _, input_len = input_ids.shape
                         draft_past_key_values.crop(input_len-1)
 
-                # * tree decoding
                 with nvtx.annotate("target_decode", color="orange"):
                     prev_kv_len = past_key_values.get_seq_length()
                     outputs = self._tree_decoding(tree, past_key_values, position_offset=input_ids.shape[1]-1, cache_position=cache_position, device=hidden_states.device)
@@ -150,7 +144,6 @@ class EagleSDGeneratorBase(ClassicSDGeneratorBase):
                     hidden_states = outputs.hidden_states[-1]
                     del outputs
 
-                # * verify
                 with nvtx.annotate("verify"):
                     root_ind = 0
                     sampled_tokens, hidden_indices, (total_len, accept_len) = self._verify(
@@ -163,13 +156,11 @@ class EagleSDGeneratorBase(ClassicSDGeneratorBase):
                     hidden_indices = hidden_indices.to(hidden_states.device)
                     del next_token_logits
                     
-                # * update input_ids, hidden_states, and cache_position
                 with nvtx.annotate("state_update"):
                     input_ids = torch.cat([input_ids, sampled_tokens], dim=-1)
                     hidden_states = hidden_states[:, hidden_indices].clone()
                     cache_position += sampled_tokens.shape[1]
                 
-                # * check stopping criteria
                 with nvtx.annotate("stop_check"):
                     finished, input_ids, kept, prune_tokens = self._apply_tokenwise_stopping_criteria(
                         input_ids=input_ids,
@@ -185,7 +176,6 @@ class EagleSDGeneratorBase(ClassicSDGeneratorBase):
                     if finished:
                         past_key_values.seq_len -= prune_tokens
                     
-            # * draft kv missing last llm hidden_states for multi-turn tasks
             self.draft_model.final_update(input_ids, hidden_states)
                 
         return input_ids

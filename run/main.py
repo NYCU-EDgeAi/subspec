@@ -230,7 +230,6 @@ def _build_full_parser(base_parser: argparse.ArgumentParser, default_config: Dic
     full_parser.add_argument("--draft-model-path", type=str, default=default_config.get("draft_model_path", None))
     full_parser.add_argument("--max-length", type=int, default=default_config.get("max_length", 2048))
     full_parser.add_argument("--seed", type=int, default=default_config.get("seed", 0))
-    # NOTE: keep the historical default here; method/yaml overrides can still provide device via other means.
     full_parser.add_argument("--device", type=str, default="cuda:0")
     full_parser.add_argument("--compile-mode", type=str, default=default_config.get("compile_mode", None))
     full_parser.add_argument("--temperature", type=float, default=default_config.get("temperature", 0.0))

@@ -169,7 +169,6 @@ class ClassicSDDraftModel(DraftModelBase):
         self.request_kv_cache = request_kv_cache
         
         max_cache_len = None
-        # self.flashinferWrapper = kwargs["flashinferWrapper"]
         if not hasattr(self, 'flashinferWrapper'):
             self.flashinferWrapper = FlashinferAttentionWrapper(
                 self.model.config.num_attention_heads, self.model.config.num_key_value_heads, self.model.config.hidden_size,request_kv_cache.kvCachePool.page_len
@@ -192,28 +191,14 @@ class ClassicSDDraftModel(DraftModelBase):
         with nvtx.annotate("draft_prefill", color="red"):
             
             mode = "decode"
-            # request_kv_cache.increment() 
             request_kv_cache.increment(input_len)
 
-            # batch_position = getKvCacheBatchPosition(
-            #     [request_kv_cache],
-            #     mode=mode,
-            #     device=device,
-            #     treeTokens=None if mode != "tree" else input_len,
-            # )
             batch_position = getKvCacheBatchPosition(
                 request_kv_caches=[request_kv_cache],
                 mode='tree', 
                 device=input_ids.device,
                 treeTokens=input_len,
             )
-            # self.flashinferWrapper.prepareAttention(
-            #     mode,
-            #     batch_position,
-            #     request_kv_cache.kvCachePool.page_len,
-            #     "NONE", #POS_ENCODING_MODE.NONE
-            #     request_kv_cache.kvCachePool.cache_data[0].dtype,
-            # )  
             self.flashinferWrapper.prepareAttention(
                 'prefill',
                 batch_position,
@@ -221,12 +206,10 @@ class ClassicSDDraftModel(DraftModelBase):
                 "NONE", # POS_ENCODING_MODE.NONE,
                 self.kvCachePool.cache_data[0].dtype,
             )
-            # position_ids = torch.full((batch_size, input_len), kv_len, device=device, dtype=torch.long)
             position_ids = torch.arange(kv_len, kv_len + input_len, dtype=torch.long, device=device).unsqueeze(0)
             sampled_probs = self(
                 input_ids,
                 with_softmax=True,
-                # use_cache=False,
                 logits_to_keep=1,
                 position_ids = position_ids,
                 kvCachePool=request_kv_cache.kvCachePool,
@@ -329,7 +312,7 @@ class ClassicSDDraftModel(DraftModelBase):
     def postspec(self):
         if not self.had_first_speculate:
             return
-        if self.postspec_count > (self.post_draft_params.max_depth - 1):
+        if self.postspec_count > (self.draft_params.max_depth - 1):
             return
         with nvtx.annotate("postspec_step", color="blue"):
             self.speculate_once()

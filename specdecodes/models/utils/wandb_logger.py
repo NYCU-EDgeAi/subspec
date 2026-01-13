@@ -12,6 +12,7 @@ class WandbLogger:
                     cls._instance = super(WandbLogger, cls).__new__(cls)
                     cls._instance.log_data = {}
                     cls._instance.flags = {}
+                    cls._instance.internal_data = {}
         return cls._instance
 
     def set_flag(self, key: str, value: Any) -> None:
@@ -26,8 +27,13 @@ class WandbLogger:
 
     def clear_log_data(self) -> None:
         self.log_data.clear()
+        # Keep internal running stats in sync with public log data.
+        self.internal_data.clear()
 
     def clear_flags(self) -> None:
         self.flags.clear()
+
+    def clear_internal_data(self) -> None:
+        self.internal_data.clear()
 
 wandb_logger = WandbLogger()

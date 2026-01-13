@@ -37,7 +37,6 @@ class GeneratorPipelineBuilder:
         
         self.config = config
 
-        # Expose config attributes directly for legacy call sites.
         self.__dict__.update(config.__dict__)
 
         # Normalize recipe from YAML/preset into an actual recipe object.
