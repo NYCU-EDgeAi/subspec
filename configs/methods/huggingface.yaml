@@ -10,6 +10,12 @@ cache_implementation: dynamic
 warmup_iter: 0
 compile_mode: null
 
+# Target sampling settings (defaults)
+do_sample: false
+temperature: 0
+
 generator_profiling: true
 
-generator_kwargs: {}
+generator_kwargs:
+  verify_method: exact
+  verify_kwargs: {}

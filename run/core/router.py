@@ -33,8 +33,8 @@ def run_app(builder):
         t: str,
         d: str,
         k: str,
-        e: str = typer.Option(None, help="Comma-separated lossy_threshold values (e.g. 0.1,0.2,0.3)"),
-        w: str = typer.Option(None, help="Comma-separated lossy_window_size values (e.g. 4,6,8)"),
+        e: str = typer.Option(None, help="Comma-separated lossy verify threshold values (e.g. 0.1,0.3,0.6)"),
+        w: str = typer.Option(None, help="Comma-separated lossy verify window_size values (e.g. 4,6,8)"),
         max_samples: int = None,
     ):
         """
@@ -48,8 +48,8 @@ def run_app(builder):
             temperature_values=t,
             max_depth_values=d,
             topk_len_values=k,
-            lossy_threshold_values=e,
-            lossy_window_size_values=w,
+            threshold_values=e,
+            window_size_values=w,
             max_samples=max_samples,
         )
         

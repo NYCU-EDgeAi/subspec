@@ -124,7 +124,7 @@ def _apply_yaml_overrides(default_config: Dict[str, Any], yaml_config: Dict[str,
         from specdecodes.models.utils.utils import DraftParams
 
         base_dp = _draft_params_to_dict(default_config.get("draft_params"))
-        merged_dp = _deep_merge_dict(base_dp, cfg["draft_params"])
+        merged_dp = _deep_merge_dict(base_dp, dict(cfg["draft_params"]))
         cfg["draft_params"] = DraftParams(**merged_dp)
 
     # generator_kwargs deep-merge.
@@ -261,26 +261,28 @@ def _build_full_parser(base_parser: argparse.ArgumentParser, default_config: Dic
         help="Enable/disable generator profiling",
     )
 
-    default_lossy_verify = bool((default_config.get("generator_kwargs") or {}).get("lossy_verify", False))
+    default_verify_method = str((default_config.get("generator_kwargs") or {}).get("verify_method", "exact") or "exact").strip().lower()
     full_parser.add_argument(
-        "--lossy-verify",
-        action="store_true",
-        default=default_lossy_verify,
-        help="Use lossy verification (threshold + window) instead of exact verification for tree-based SD methods",
+        "--verify-method",
+        type=str,
+        choices=["exact", "lossy"],
+        default=default_verify_method,
+        help="Verification method for tree-based SD: exact or lossy",
     )
 
-    # DraftParams overrides (only applied when explicitly provided)
     full_parser.add_argument(
-        "--lossy-threshold",
+        "--threshold",
+        "-e",
         type=float,
         default=None,
-        help="Lossy SD: accept non-matching draft token if target prob >= this threshold",
+        help="Lossy verify: accept non-matching draft token only if target prob >= this threshold",
     )
     full_parser.add_argument(
-        "--lossy-window-size",
+        "--window-size",
+        "-w",
         type=int,
         default=None,
-        help="Lossy SD: require this many future locally-correct draft nodes (lookahead)",
+        help="Lossy verify: require this many future locally-correct nodes (lookahead)",
     )
 
     return full_parser
@@ -332,23 +334,17 @@ def _apply_generator_kwargs_overrides(config: AppConfig, config_args: argparse.N
     if config_args.prefill_chunk_size is not None:
         config.generator_kwargs["prefill_chunk_size"] = int(config_args.prefill_chunk_size)
 
-    # Verifier mode switch (applies to tree-based SD generators that route through verify_tree).
-    config.generator_kwargs["lossy_verify"] = bool(config_args.lossy_verify)
+    # Verifier selection + method kwargs.
+    config.generator_kwargs["verify_method"] = str(getattr(config_args, "verify_method", "exact") or "exact").strip().lower()
+    config.generator_kwargs.setdefault("verify_kwargs", {})
+    if getattr(config_args, "threshold", None) is not None:
+        config.generator_kwargs["verify_kwargs"]["threshold"] = float(config_args.threshold)
+    if getattr(config_args, "window_size", None) is not None:
+        config.generator_kwargs["verify_kwargs"]["window_size"] = int(config_args.window_size)
 
 
 def _apply_draft_params_overrides(config: AppConfig, config_args: argparse.Namespace) -> None:
-    if config_args.lossy_threshold is None and config_args.lossy_window_size is None:
-        return
-
-    from specdecodes.models.utils.utils import DraftParams
-
-    if config.draft_params is None:
-        config.draft_params = DraftParams()
-
-    if config_args.lossy_threshold is not None:
-        config.draft_params.lossy_threshold = float(config_args.lossy_threshold)
-    if config_args.lossy_window_size is not None:
-        config.draft_params.lossy_window_size = int(config_args.lossy_window_size)
+    return
 
 
 def _load_yaml_and_method(args: argparse.Namespace) -> tuple[str, Dict[str, Any], str]:
@@ -410,7 +406,6 @@ def _build_app_config(
 
     _apply_cli_overrides(config, config_args)
     _apply_generator_kwargs_overrides(config, config_args)
-    _apply_draft_params_overrides(config, config_args)
     return config
 
 

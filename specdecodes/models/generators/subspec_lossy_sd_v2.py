@@ -57,8 +57,14 @@ class SubSpecLossySDGeneratorBase(_SubSpecSDGeneratorBase):
             root_index=root_local,
             eos_token_id=getattr(self.draft_model, "eos_token_id", None),
             do_sample=do_sample,
-            threshold=float(getattr(self.draft_params, "lossy_threshold", 0.0)),
-            window_size=int(getattr(self.draft_params, "lossy_window_size", 1)),
+            threshold=float(
+                (self.generator_kwargs or {}).get("verify_kwargs", {}).get("threshold",
+                (self.generator_kwargs or {}).get("verify_kwargs", {}).get("lossy_threshold", 0.0))
+            ),
+            window_size=int(
+                (self.generator_kwargs or {}).get("verify_kwargs", {}).get("window_size",
+                (self.generator_kwargs or {}).get("verify_kwargs", {}).get("lossy_window_size", 1))
+            ),
         )
 
         # Convert local hidden indices back to original indexing.

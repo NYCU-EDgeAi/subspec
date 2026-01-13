@@ -10,7 +10,9 @@ draft_model_path: ~/checkpoints/eagle/official/EAGLE-Qwen2.5-7B-Instruct
 do_sample: false
 temperature: 0
 
-generator_kwargs: {}
+generator_kwargs:
+  verify_method: exact
+  verify_kwargs: {}
 
 draft_params:
   temperature: 1

@@ -1,5 +1,5 @@
 import torch
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple
 
 from .lossy_tree_verify import lossy_bottom_up_verify
 
@@ -16,9 +16,8 @@ def verify_tree(
     logits_processor,
     do_sample: bool,
     skip_nodes: int = 0,
-    lossy: bool = False,
-    lossy_threshold: float = 0.0,
-    lossy_window_size: int = 1,
+    verify_method: str = "exact",
+    verify_kwargs: Optional[dict[str, Any]] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor, Tuple[int, int]]:
     """Verify a speculative draft tree against target logits.
 
@@ -34,8 +33,8 @@ def verify_tree(
       logits_processor: HF LogitsProcessorList (or None if do_sample=False).
       do_sample: Whether to sample target token.
       skip_nodes: Number of leading nodes skipped for this verify call (SubSpec v2 post-spec).
-      lossy: If True, use lossy bottom-up verification.
-      lossy_threshold/window_size: Parameters for lossy verification.
+    verify_method: Verification method. Supported: "exact", "lossy".
+    verify_kwargs: Method-specific kwargs. For lossy: {"threshold": float, "window_size": int}.
 
     Returns:
       sampled_tokens: (1, L)
@@ -43,7 +42,10 @@ def verify_tree(
       (total_len, accept_len): metrics (accept_len excludes bonus token)
     """
 
-    if not lossy:
+    method = str(verify_method or "exact").strip().lower()
+    vk: dict[str, Any] = dict(verify_kwargs or {})
+
+    if method == "exact":
         # ---- Exact verifier (existing behavior) ----
         global_p = sample_token_fn(logits, logits_processor, do_sample, return_probs=True)
         global_p = global_p.squeeze(0).cpu()
@@ -102,6 +104,9 @@ def verify_tree(
 
         return sampled_tokens.unsqueeze(0), hidden_indices, (int(total_len), int(accept_len))
 
+    if method != "lossy":
+        raise ValueError(f"Unsupported verify_method: {verify_method!r} (supported: 'exact', 'lossy')")
+
     # ---- Lossy bottom-up verifier ----
     if do_sample and logits_processor is None:
         from transformers.generation.logits_process import LogitsProcessorList
@@ -146,8 +151,8 @@ def verify_tree(
         root_index=root_local,
         eos_token_id=eos_token_id,
         do_sample=do_sample,
-        threshold=float(lossy_threshold),
-        window_size=int(lossy_window_size),
+        threshold=float(vk.get("threshold", 0.0)),
+        window_size=int(vk.get("window_size", 1)),
     )
 
     hidden_indices = hidden_1d_local + int(skip_nodes)

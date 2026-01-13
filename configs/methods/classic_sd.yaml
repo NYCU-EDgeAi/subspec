@@ -11,10 +11,16 @@ cache_implementation: static
 warmup_iter: 1
 compile_mode: max-autotune
 
+# Target sampling settings (defaults)
+do_sample: false
+temperature: 0
+
 generator_profiling: true
 
 generator_kwargs:
   prefill_chunk_size: 4096
+  verify_method: exact
+  verify_kwargs: {}
 
 # Draft tree parameters
 # (These match the old preset defaults)

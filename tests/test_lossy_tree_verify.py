@@ -44,16 +44,51 @@ def test_lossy_verify_exact_match_window0():
     assert hidden.tolist() == [0, 1]
 
 
-def test_lossy_verify_threshold_acceptance_window0():
-    # Tree: root -> child(tok=5)
-    token_ids = torch.tensor([0, 5], dtype=torch.long)
-    parent = torch.tensor([-1, 0], dtype=torch.long)
-    children = [[1], []]
+def test_lossy_verify_prob_gate_accepts_when_above_threshold_window0():
+    # Tree: root -> {child(tok=5), child(tok=7)}
+    token_ids = torch.tensor([0, 5, 7], dtype=torch.long)
+    parent = torch.tensor([-1, 0, 0], dtype=torch.long)
+    children = [[1, 2], [], []]
 
-    # root argmax is 9, but P(5)=0.45 so it should be accepted with threshold=0.4
+    # Root argmax is 9 (no matching child). We allow a lossy accept only when the
+    # target assigns probability >= threshold to some draft child token.
     probs = _make_probs(
         [
-            [0.0, 0.0, 0.0, 0.0, 0.0, 0.45, 0.0, 0.0, 0.0, 0.55],
+            [0.0, 0.0, 0.0, 0.0, 0.0, 0.30, 0.0, 0.20, 0.0, 0.50],
+            [0.05, 0.90, 0.01, 0.01, 0.01, 0.01, 0.00, 0.00, 0.00, 0.01],
+            [0.05, 0.90, 0.01, 0.01, 0.01, 0.01, 0.00, 0.00, 0.00, 0.01],
+        ]
+    )
+
+    sampled, hidden, accept_len = lossy_bottom_up_verify(
+        probs=probs,
+        token_ids=token_ids,
+        parent_indices=parent,
+        children_lists=children,
+        root_index=0,
+        eos_token_id=None,
+        do_sample=False,
+        threshold=0.25,
+        window_size=0,
+    )
+
+    assert accept_len == 1
+    assert sampled[0].item() == 5
+    assert hidden[0].item() == 0
+
+
+def test_lossy_verify_prob_gate_rejects_when_below_threshold_window0():
+    # Same tree, but now the target distribution does not match any child token and
+    # assigns too little probability to draft child tokens. Lossy accept should be rejected.
+    token_ids = torch.tensor([0, 5, 7], dtype=torch.long)
+    parent = torch.tensor([-1, 0, 0], dtype=torch.long)
+    children = [[1, 2], [], []]
+
+    # Argmax is 9 (no matching child). Child tokens have low probability.
+    probs = _make_probs(
+        [
+            [0.0, 0.0, 0.0, 0.0, 0.0, 0.01, 0.0, 0.01, 0.0, 0.98],
+            [0.05, 0.90, 0.01, 0.01, 0.01, 0.01, 0.00, 0.00, 0.00, 0.01],
             [0.05, 0.90, 0.01, 0.01, 0.01, 0.01, 0.00, 0.00, 0.00, 0.01],
         ]
     )
@@ -70,9 +105,10 @@ def test_lossy_verify_threshold_acceptance_window0():
         window_size=0,
     )
 
-    assert accept_len == 1
-    assert sampled[0].item() == 5
-    assert hidden[0].item() == 0
+    # No draft token accepted; we only emit the bonus token (argmax=9).
+    assert accept_len == 0
+    assert sampled.tolist() == [9]
+    assert hidden.tolist() == [0]
 
 
 def test_lossy_verify_window_lookahead():
@@ -233,7 +269,8 @@ def test_lossy_verify_long_tree_window4_prefers_long_lookahead_branch():
 if __name__ == "__main__":
     print("Running lossy tree verify tests...")
     test_lossy_verify_exact_match_window0()
-    test_lossy_verify_threshold_acceptance_window0()
+    test_lossy_verify_prob_gate_accepts_when_above_threshold_window0()
+    test_lossy_verify_prob_gate_rejects_when_below_threshold_window0()
     test_lossy_verify_window_lookahead()
     test_lossy_verify_long_tree_window4_prefers_long_lookahead_branch()
     print("All tests passed.")

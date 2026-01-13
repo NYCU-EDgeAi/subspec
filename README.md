@@ -88,6 +88,20 @@ python -m run.main --config configs/exp_offloading/vanilla_qwen_7b.yaml run-test
 python -m run.main --config configs/methods/classic_sd.yaml --device cuda:1 --warmup-iter 0 run-test
 ```
 
+Verification is configured via `generator_kwargs.verify_method` and `generator_kwargs.verify_kwargs`.
+
+Example (lossy tree verification). `threshold` is a probability threshold on the target distribution for accepting a non-matching draft child token:
+
+```yaml
+generator_kwargs:
+  verify_method: lossy
+  verify_kwargs:
+		threshold: 0.3
+    window_size: 6
+```
+
+CLI equivalents: `--verify-method lossy --threshold <threshold> --window-size <window_size>`.
+
 Offloading YAML configs parameterize “how many layers remain on GPU” via:
 
 ```yaml
@@ -120,7 +134,7 @@ python -m run.main --config configs/methods/<method_name>.yaml --nvtx-profiling 
 
 ### Detailed analysis
 
-The old `DETAILED_ANALYSIS` env var is replaced with a config-driven flag:
+Enable detailed analysis logging via YAML (or `--detailed-analysis/--no-detailed-analysis`):
 
 ```yaml
 detailed_analysis: true

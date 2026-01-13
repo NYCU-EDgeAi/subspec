@@ -182,7 +182,7 @@ def run_mtbench_eval(generator, tokenizer, past_key_values, draft_past_key_value
                     tmp_exp_log['speculate_count'] = 0
                 tmp_exp_log['post_verify_count'] += wandb_logger.log_data.get('post_verify_count', 0)
                 tmp_exp_log['speculate_count'] += wandb_logger.log_data.get('speculate_count', 0)
-            
+
             exp_log = {**exp_log, tid: {**wandb_logger.log_data, "query": query, "response": output_message, "peak_memory": torch.cuda.max_memory_reserved(args.device)/(1024**3)}}
             messages.append({"role": "system", "content": output_message})
             

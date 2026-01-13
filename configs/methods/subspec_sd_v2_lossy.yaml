@@ -11,15 +11,23 @@ cache_implementation: static
 warmup_iter: 1
 compile_mode: max-autotune
 
+# Target sampling settings (defaults)
+do_sample: false
+temperature: 0
+
 generator_profiling: true
 
 generator_kwargs:
   prefill_chunk_size: 4096
-  lossy_verify: true
+  verify_method: lossy
+  verify_kwargs:
+    # Probability threshold on target distribution for accepting a non-matching draft child.
+    # Lossy accept is allowed only when probs[parent, draft_token] >= threshold.
+    threshold: 0.3
+    # Require at least this many future locally-correct nodes (lookahead).
+    window_size: 6
 
 draft_params:
   temperature: 0.2
   max_depth: 24
   topk_len: 6
-  lossy_threshold: 0.3
-  lossy_window_size: 6

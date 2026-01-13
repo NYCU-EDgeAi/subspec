@@ -12,10 +12,16 @@ warmup_iter: 1
 # Required for flashinfer to work correctly
 compile_mode: max-autotune-no-cudagraphs
 
+# Target sampling settings (defaults)
+do_sample: false
+temperature: 0
+
 generator_profiling: true
 
 generator_kwargs:
   prefill_chunk_size: 4096
+  verify_method: exact
+  verify_kwargs: {}
 
 draft_params:
   temperature: 0.2

@@ -24,16 +24,26 @@ def evaluate_single_param(
     temperature,
     max_depth,
     topk_len,
-    lossy_threshold=None,
-    lossy_window_size=None,
+    threshold=None,
+    window_size=None,
 ):
     builder.draft_params = DraftParams(
         temperature=temperature,
         max_depth=max_depth,
         topk_len=topk_len,
-        lossy_threshold=float(lossy_threshold) if lossy_threshold is not None else 0.0,
-        lossy_window_size=int(lossy_window_size) if lossy_window_size is not None else 1,
     )
+
+    builder.generator_kwargs = builder.generator_kwargs or {}
+    builder.generator_kwargs["verify_method"] = (
+        "lossy"
+        if (threshold is not None or window_size is not None)
+        else builder.generator_kwargs.get("verify_method", "exact")
+    )
+    builder.generator_kwargs.setdefault("verify_kwargs", {})
+    if threshold is not None:
+        builder.generator_kwargs["verify_kwargs"]["threshold"] = float(threshold)
+    if window_size is not None:
+        builder.generator_kwargs["verify_kwargs"]["window_size"] = int(window_size)
     generator, tokenizer, past_kv, draft_past_kv = builder.build_generator_pipeline(model, draft_model, tokenizer)
     return run_mtbench_eval(generator, tokenizer, past_kv, draft_past_kv, args, dataset, log_dir)
 
@@ -43,8 +53,8 @@ def main(
     temperature_values,
     max_depth_values,
     topk_len_values,
-    lossy_threshold_values=None,
-    lossy_window_size_values=None,
+    threshold_values=None,
+    window_size_values=None,
     max_samples=None,
 ):
     # Enable profiling, disable logging profiling results
@@ -68,27 +78,27 @@ def main(
     max_depth_values = [int(x) for x in max_depth_values.split(",")]
     topk_len_values = [int(x) for x in topk_len_values.split(",")]
 
-    if lossy_threshold_values is None:
-        lossy_threshold_values = [0.0]
+    if threshold_values is None:
+        threshold_values = [0.0]
     else:
-        lossy_threshold_values = [float(x) for x in str(lossy_threshold_values).split(",") if str(x).strip()]
-        if not lossy_threshold_values:
-            lossy_threshold_values = [0.0]
+        threshold_values = [float(x) for x in str(threshold_values).split(",") if str(x).strip()]
+        if not threshold_values:
+            threshold_values = [0.0]
 
-    if lossy_window_size_values is None:
-        lossy_window_size_values = [1]
+    if window_size_values is None:
+        window_size_values = [1]
     else:
-        lossy_window_size_values = [int(x) for x in str(lossy_window_size_values).split(",") if str(x).strip()]
-        if not lossy_window_size_values:
-            lossy_window_size_values = [1]
+        window_size_values = [int(x) for x in str(window_size_values).split(",") if str(x).strip()]
+        if not window_size_values:
+            window_size_values = [1]
 
     logging.info(
-        "Candidate values: temperature=%s, max_depth=%s, topk_len=%s, lossy_threshold=%s, lossy_window_size=%s",
+        "Candidate values: temperature=%s, max_depth=%s, topk_len=%s, threshold=%s, window_size=%s",
         temperature_values,
         max_depth_values,
         topk_len_values,
-        lossy_threshold_values,
-        lossy_window_size_values,
+        threshold_values,
+        window_size_values,
     )
     
     # Handle output directories
@@ -120,22 +130,22 @@ def main(
         temperature_values,
         max_depth_values,
         topk_len_values,
-        lossy_threshold_values,
-        lossy_window_size_values,
+        threshold_values,
+        window_size_values,
     ))
-    for temperature, max_depth, topk_len, lossy_threshold, lossy_window_size in tqdm(
+    for temperature, max_depth, topk_len, threshold, window_size in tqdm(
         combos,
         total=len(combos),
         desc="Configurations",
         leave=True,
     ):
         logging.info(
-            "\nTesting DraftParams: temperature=%s, max_depth=%s, topk_len=%s, lossy_threshold=%s, lossy_window_size=%s",
+            "\nTesting DraftParams: temperature=%s, max_depth=%s, topk_len=%s, threshold=%s, window_size=%s",
             temperature,
             max_depth,
             topk_len,
-            lossy_threshold,
-            lossy_window_size,
+            threshold,
+            window_size,
         )
         
         # fix random seed to 0 for each iteration for reproducibility
@@ -145,7 +155,7 @@ def main(
         # Handle output directories
         log_dir = os.path.join(
             log_dir_base,
-            f"t{temperature}_d{max_depth}_k{topk_len}_e{lossy_threshold}_w{lossy_window_size}",
+            f"t{temperature}_d{max_depth}_k{topk_len}_th{threshold}_w{window_size}",
         )
         os.makedirs(log_dir, exist_ok=True)
         logging.info(f"Log directory: {log_dir}")
@@ -199,8 +209,8 @@ def main(
                 temperature,
                 max_depth,
                 topk_len,
-                lossy_threshold,
-                lossy_window_size,
+                threshold,
+                window_size,
             )
 
             tput_mean = float(results.get("tput_mean", 0.0))
@@ -232,8 +242,8 @@ def main(
                     "avg_draft_time": f"{avg_draft_time:.3f}",
                     "avg_target_time": f"{avg_target_time:.3f}",
                     "peak_memory": f"{peak_mem:.3f} GiB",
-                    "lossy_threshold": f"{float(lossy_threshold):.6g}",
-                    "lossy_window_size": int(lossy_window_size),
+                    "threshold": f"{float(threshold):.6g}",
+                    "window_size": int(window_size),
                 }
             }, f, indent=4)
             f.write("\n")

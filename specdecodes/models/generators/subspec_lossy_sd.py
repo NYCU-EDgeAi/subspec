@@ -44,8 +44,14 @@ class SubSpecLossySDGeneratorBase(_SubSpecSDGeneratorBase):
             root_index=int(root_ind),
             eos_token_id=getattr(self.draft_model, "eos_token_id", None),
             do_sample=do_sample,
-            threshold=float(getattr(self.draft_params, "lossy_threshold", 0.0)),
-            window_size=int(getattr(self.draft_params, "lossy_window_size", 1)),
+            threshold=float(
+                (self.generator_kwargs or {}).get("verify_kwargs", {}).get("threshold",
+                (self.generator_kwargs or {}).get("verify_kwargs", {}).get("lossy_threshold", 0.0))
+            ),
+            window_size=int(
+                (self.generator_kwargs or {}).get("verify_kwargs", {}).get("window_size",
+                (self.generator_kwargs or {}).get("verify_kwargs", {}).get("lossy_window_size", 1))
+            ),
         )
 
         sampled_tokens = sampled_1d.unsqueeze(0)  # (1, L)

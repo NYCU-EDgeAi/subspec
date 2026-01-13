@@ -93,9 +93,8 @@ class ClassicSDGeneratorBase(GeneratorBase):
             return None, sampled_token_id
         
     def _verify(self, tree, root_ind ,logits, logits_processor, do_sample,skip_nodes=0):
-        lossy_enabled = bool(self.generator_kwargs.get("lossy_verify", False))
-        lossy_threshold = float(getattr(self.draft_params, "lossy_threshold", 0.3))
-        lossy_window_size = int(getattr(self.draft_params, "lossy_window_size", 6))
+        verify_method = str(self.generator_kwargs.get("verify_method", "exact") or "exact").strip().lower()
+        verify_kwargs = dict(self.generator_kwargs.get("verify_kwargs") or {})
 
         return verify_tree(
             tree=tree,
@@ -107,9 +106,8 @@ class ClassicSDGeneratorBase(GeneratorBase):
             logits_processor=logits_processor,
             do_sample=do_sample,
             skip_nodes=int(skip_nodes),
-            lossy=lossy_enabled,
-            lossy_threshold=lossy_threshold,
-            lossy_window_size=lossy_window_size,
+            verify_method=verify_method,
+            verify_kwargs=verify_kwargs,
         )
 
 
