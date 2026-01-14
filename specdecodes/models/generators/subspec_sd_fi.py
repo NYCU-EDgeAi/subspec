@@ -42,8 +42,6 @@ class SubSpecSDGeneratorBase(ClassicSDGeneratorBase):
             num_tokens = self.draft_params.max_verify_tokens
             kvCachePool = request_kv_cache.kvCachePool
             
-            request_kv_cache.increment(num_tokens)
-
             batch_position = getKvCacheBatchPosition(
                 request_kv_caches=[request_kv_cache],
                 mode='tree',  # Set to False if you're doing incremental decoding
@@ -171,11 +169,11 @@ class SubSpecSDGeneratorBase(ClassicSDGeneratorBase):
             while not finished:
                 with nvtx.annotate("speculate", color="cyan"):
                     last_token_id = sampled_tokens[:, -1:].clone(memory_format=torch.contiguous_format)
+                    prev_kv_len = request_kv_cache.get_seq_length() + 1
                     tree = self._speculate(last_token_id, request_kv_cache)
 
-                with nvtx.annotate("target_decode", color="orange"):
-                    prev_kv_len = request_kv_cache.get_seq_length() + 1
-                    outputs = self._tree_decoding(tree, request_kv_cache, position_offset=input_ids.shape[1]-1, cache_position=cache_position, device=input_ids.device)
+                with nvtx.annotate("target_decode", color="orange"):                   
+                    outputs = self._tree_decoding(tree, request_kv_cache, position_offset=input_ids.shape[1]-1, cache_position=cache_position, device=input_ids.device)  
                     next_token_logits = outputs.logits
                     del outputs
 

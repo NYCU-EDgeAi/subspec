@@ -326,7 +326,6 @@ class SubSpecSDDraftModel(DraftModelBase):
             with nvtx.annotate("state_update"):
                 position_ids += 1
 
-        request_kv_cache.decrement(kv_len - org_kv_len)
         self.update_tree(self.tree_data)
         self.token_ids = token_ids
         self.position_ids = position_ids

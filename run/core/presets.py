@@ -70,6 +70,33 @@ def flashinfer_load_draft_model(builder, target_model, tokenizer, draft_model_pa
     apply_flashinfer_kernel_to_llama(attention=True, rms_norm=True, swiglu=False, model=draft_model)
     return draft_model
 
+def flashinfer_load_draft_model_new(builder, target_model, tokenizer, draft_model_path):
+    try:
+        from specdecodes.models.utils.flashinfer_new.monkey_patch import apply_flashinfer_kernel_to_llama
+    except ModuleNotFoundError as e:
+        raise ImportError(
+            f"Method '{builder.config.method}' requires the optional dependency 'flashinfer'.\n"
+            "Hint: install it (and its deps), e.g. `pip install flashinfer-python`, then retry."
+        ) from e
+    
+    # We need to get the class from the registry entry that is currently being used/loaded.
+    # However, builder.config.method gives us the method name.
+    entry = ModelRegistry.get(builder.config.method)
+    draft_model_cls = entry.get_draft_model_cls() if entry else None
+    if draft_model_cls is None:
+        raise ImportError(f"Draft model class not registered for method '{builder.config.method}'.")
+    
+    draft_model = draft_model_cls.from_pretrained(
+        draft_model_path,
+        target_model=target_model,
+        torch_dtype=builder.dtype,
+        device_map=builder.device,
+        eos_token_id=tokenizer.eos_token_id
+    )
+    apply_flashinfer_kernel_to_llama(attention=True, rms_norm=False, swiglu=False, model=target_model)
+    apply_flashinfer_kernel_to_llama(attention=True, rms_norm=False, swiglu=False, model=draft_model)
+    return draft_model
+
 def eagle_load_draft_model(builder, target_model, tokenizer, draft_model_path):
     import os
     entry = ModelRegistry.get(builder.config.method)
@@ -207,6 +234,49 @@ def register_presets():
             },
             load_draft_model_fn=flashinfer_load_draft_model,
             load_kv_cache_fn=flashinfer_load_kv_cache,
+            needs_draft_kv_cache=False,
+        )
+    except ImportError:
+        # If the base SubSpec recipe isn't importable, don't register this method.
+        pass
+
+    # SubSpec SD V2 FlashInfer (lazy import)
+    try:
+        from specdecodes.helpers.recipes.subspec.hqq_4bit_postspec import (
+            Recipe as SubSpecRecipeV2,
+        )
+
+        ModelRegistry.register(
+            name="subspec_sd_v2_fi",
+            generator_cls="specdecodes.models.generators.subspec_sd_v2_fi:SubSpecSDGenerator",
+            draft_model_cls="specdecodes.models.draft_models.subspec_sd_fi:SubSpecSDDraftModel",
+            default_config={
+                "llm_path": "meta-llama/Llama-3.1-8B-Instruct",
+                "recipe": SubSpecRecipeV2(),
+            },
+            load_draft_model_fn=flashinfer_load_draft_model,
+            load_kv_cache_fn=flashinfer_load_kv_cache,
+            # Needs a separate draft KV cache.
+            needs_draft_kv_cache=False,
+        )
+    except ImportError:
+        pass
+
+    try:
+        from specdecodes.helpers.recipes.subspec.hqq_4bit_postspec import (
+            Recipe as SubSpecRecipeV1,
+        )
+
+        ModelRegistry.register(
+            name="subspec_sd_fi_new",
+            generator_cls="specdecodes.models.generators.subspec_sd_fi_new:SubSpecSDGenerator",
+            draft_model_cls="specdecodes.models.draft_models.subspec_sd_fi_new:SubSpecSDDraftModel",
+            default_config={
+                "llm_path": "meta-llama/Llama-3.1-8B-Instruct",
+                "recipe": SubSpecRecipeV1(),
+            },
+            load_draft_model_fn=flashinfer_load_draft_model_new,
+            # load_kv_cache_fn=flashinfer_load_kv_cache,
             needs_draft_kv_cache=False,
         )
     except ImportError:

@@ -451,18 +451,10 @@ class FlashInferCache():
                 f"({cache_page_size / (1024**2):.2f} MiB required, "
                 f"{free_memory / (1024**2):.2f} MiB available)."
             )
-        num_pages_to_allocate = int(free_memory * 0.50 / cache_page_size)
         
-        if max_tokens is not None and num_pages_to_allocate * PAGE_LEN > max_tokens:
-            num_pages_to_allocate = max_tokens // PAGE_LEN + 1
-        logging.info(
-            "FlashInferCache: allocating %d pages (%d tokens capacity)",
-            num_pages_to_allocate,
-            int(num_pages_to_allocate) * int(PAGE_LEN),
-        )
-        
+        max_pages = 1
         self.kvCachePool = KvCachePool(
-                max_pages = num_pages_to_allocate,
+                max_pages = max_pages,
                 num_layers = config.num_hidden_layers,
                 num_heads = config.num_key_value_heads,
                 head_dim = head_dim,
