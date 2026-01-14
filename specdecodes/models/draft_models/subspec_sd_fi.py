@@ -350,7 +350,7 @@ class SubSpecSDDraftModel(DraftModelBase):
 
     @torch.no_grad()
     def speculate_once(self, **kwargs):
-        tree_attention_mask = self.tree_mask_cache.get_tree_mask()
+        tree_attention_mask = self.tree_mask_cache.get_tree_mask(return_invert=False)
         token_ids = self.token_ids
         parent_probs = self.parent_probs
         position_ids = self.position_ids
