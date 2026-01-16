@@ -90,17 +90,18 @@ python -m run.main --config configs/methods/classic_sd.yaml --device cuda:1 --wa
 
 Verification is configured via `generator_kwargs.verify_method` and `generator_kwargs.verify_kwargs`.
 
-Example (lossy tree verification). `threshold` is a probability threshold on the target distribution for accepting a non-matching draft child token:
+Example (lossy tree verification). `threshold_method` selects the gate: `entropy` (paper) uses normalized entropy $h_j < \theta$; `prob` uses a probability gate on the target distribution. `window_size` requires at least that many exact-match tokens *after* a lossy-accepted child.
 
 ```yaml
 generator_kwargs:
   verify_method: lossy
   verify_kwargs:
+		threshold_method: entropy
 		threshold: 0.3
     window_size: 6
 ```
 
-CLI equivalents: `--verify-method lossy --threshold <threshold> --window-size <window_size>`.
+CLI equivalents: `--verify-method lossy --threshold-method entropy --threshold <threshold> --window-size <window_size>`.
 
 Offloading YAML configs parameterize “how many layers remain on GPU” via:
 

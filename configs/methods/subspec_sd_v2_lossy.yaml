@@ -21,8 +21,11 @@ generator_kwargs:
   prefill_chunk_size: 4096
   verify_method: lossy
   verify_kwargs:
-    # Probability threshold on target distribution for accepting a non-matching draft child.
-    # Lossy accept is allowed only when probs[parent, draft_token] >= threshold.
+    # Threshold method: entropy (paper) or prob (probability).
+    threshold_method: entropy
+    # Entropy gate threshold (normalized entropy < threshold) when threshold_method=entropy.
+    # For threshold_method=prob, this is a probability threshold on the target distribution
+    # for accepting a non-matching draft child.
     threshold: 0.3
     # Require at least this many future locally-correct nodes (lookahead).
     window_size: 6

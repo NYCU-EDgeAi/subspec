@@ -1,7 +1,7 @@
 # SubSpec SD (v1) example
 method: subspec_sd_fi
 
-llm_path: Qwen/Qwen2-8B
+llm_path: Qwen/Qwen3-8B
 
 recipe:
   class_path: specdecodes.helpers.recipes.subspec.hqq_4bit_postspec:Recipe
