@@ -261,6 +261,12 @@ def _build_full_parser(base_parser: argparse.ArgumentParser, default_config: Dic
     )
 
     default_verify_method = str((default_config.get("generator_kwargs") or {}).get("verify_method", "exact") or "exact").strip().lower()
+    default_threshold_method = str(
+        ((default_config.get("generator_kwargs") or {}).get("verify_kwargs") or {}).get(
+            "threshold_method", "entropy"
+        )
+        or "entropy"
+    ).strip().lower()
     full_parser.add_argument(
         "--verify-method",
         type=str,
@@ -274,7 +280,17 @@ def _build_full_parser(base_parser: argparse.ArgumentParser, default_config: Dic
         "-e",
         type=float,
         default=None,
-        help="Lossy verify: accept non-matching draft token only if target prob >= this threshold",
+        help=(
+            "Lossy verify threshold: entropy gate (h_j < threshold) when threshold_method=entropy, "
+            "or target prob >= threshold when threshold_method=prob"
+        ),
+    )
+    full_parser.add_argument(
+        "--threshold-method",
+        type=str,
+        choices=["entropy", "prob"],
+        default=default_threshold_method,
+        help="Lossy verify threshold method: entropy (paper) or prob (probability)",
     )
     full_parser.add_argument(
         "--window-size",
@@ -338,6 +354,10 @@ def _apply_generator_kwargs_overrides(config: AppConfig, config_args: argparse.N
     config.generator_kwargs.setdefault("verify_kwargs", {})
     if getattr(config_args, "threshold", None) is not None:
         config.generator_kwargs["verify_kwargs"]["threshold"] = float(config_args.threshold)
+    if getattr(config_args, "threshold_method", None) is not None:
+        config.generator_kwargs["verify_kwargs"]["threshold_method"] = str(
+            config_args.threshold_method
+        ).strip().lower()
     if getattr(config_args, "window_size", None) is not None:
         config.generator_kwargs["verify_kwargs"]["window_size"] = int(config_args.window_size)
 

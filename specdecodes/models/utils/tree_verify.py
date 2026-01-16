@@ -34,7 +34,8 @@ def verify_tree(
       do_sample: Whether to sample target token.
       skip_nodes: Number of leading nodes skipped for this verify call (SubSpec v2 post-spec).
     verify_method: Verification method. Supported: "exact", "lossy".
-    verify_kwargs: Method-specific kwargs. For lossy: {"threshold": float, "window_size": int}.
+        verify_kwargs: Method-specific kwargs. For lossy:
+            {"threshold": float, "window_size": int, "threshold_method": "entropy"|"prob"}.
 
     Returns:
       sampled_tokens: (1, L)
@@ -153,6 +154,7 @@ def verify_tree(
         do_sample=do_sample,
         threshold=float(vk.get("threshold", 0.0)),
         window_size=int(vk.get("window_size", 1)),
+        threshold_method=str(vk.get("threshold_method", "prob") or "prob").strip().lower(),
     )
 
     hidden_indices = hidden_1d_local + int(skip_nodes)

@@ -191,8 +191,8 @@ def test_lossy_verify_logs_mismatch_prob_means_and_rates():
     assert abs(wandb_logger.log_data["verify_lossy_accept_rate"] - 1.0) < 1e-9
 
     # In this toy case, the mismatch is window-eligible and not threshold-blocked.
-    assert abs(wandb_logger.log_data["lossy_window_ok_best_prob_mean"] - 0.399) < 1e-6
-    assert abs(wandb_logger.log_data["lossy_window_ok_best_prob_std"] - 0.0) < 1e-9
+    assert abs(wandb_logger.log_data["lossy_window_ok_gate_mean"] - 0.399) < 1e-6
+    assert abs(wandb_logger.log_data["lossy_window_ok_gate_std"] - 0.0) < 1e-9
     assert abs(wandb_logger.log_data["lossy_window_ok_drop_rate"] - 0.0) < 1e-9
 
     # Probability assigned by target to the accepted lossy token.
@@ -286,8 +286,8 @@ def test_lossy_verify_long_tree_window4_prefers_long_lookahead_branch():
     # but it should be rejected by the window lookahead gating.
     #
     # Window semantics in lossy verifier:
-    # window_size=4 means a node is eligible only if there is a downward path
-    # of >= (4 + 1) locally-accepted nodes starting at that node.
+    # window_size=4 means the mismatch child is eligible only if there are
+    # >= 4 exact-match tokens after that child.
     #
     # Structure (indices -> token):
     # 0(root=0)
@@ -352,7 +352,7 @@ def test_lossy_verify_long_tree_window4_prefers_long_lookahead_branch():
     # Clarified window semantics:
     # - If target token matches a child, accept it (no window gating).
     # - If target token does NOT match any child, we may accept a non-matching child
-    #   only if prob>=threshold AND we can accept another `window_size` tokens afterward.
+    #   only if prob>=threshold AND we can accept `window_size` exact tokens afterward.
     probs_rows = [
         # 0: target token=3 (no matching child); lossy may choose 5 if it has long lookahead.
         # Give tok=5 enough probability to clear the threshold.
@@ -392,7 +392,7 @@ def test_lossy_verify_long_tree_window4_prefers_long_lookahead_branch():
     )
 
     # Root has no matching child, so lossy should pick tok=5 (node 1) only if there is
-    # >= window_size future acceptance available.
+    # >= window_size exact-match tokens available after it.
     assert accept_len == 8
     assert sampled.tolist()[:8] == [5, 6, 7, 14, 16, 18, 19, 4]
     assert sampled.tolist()[-1] == 15  # bonus from node 16 argmax
