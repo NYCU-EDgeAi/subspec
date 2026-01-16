@@ -17,7 +17,13 @@ def run_common_eval(generator, tokenizer, past_key_values, draft_past_key_values
         input_message = "Write an essay about large language models."
         messages = [{"role": "user", "content": input_message}]
         tokenizer.use_default_system_prompt = True
-        input_ids = tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=True, return_tensors="pt").cuda(device=args.device)
+        input_ids = tokenizer.apply_chat_template(
+            messages, 
+            tokenize=True, 
+            add_generation_prompt=True, 
+            return_tensors="pt",
+            enable_thinking=True # for Qwen 3 models
+        ).cuda(device=args.device)
         torch.cuda.empty_cache()
         with sdpa_kernel(backends=[SDPBackend.MATH]):
             gc.collect()
