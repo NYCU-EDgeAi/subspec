@@ -33,12 +33,15 @@ def run_agent_eval(generator, tokenizer, past_key_values, draft_past_key_values,
         reset_kv(past_key_values, draft_past_key_values)
     generator.profiling = is_profiling
     
-    # Optional CUDA-graph capture for FlashInfer, after warmup (stabilizes kernels/allocations).
+    # CUDA-graph capture for FlashInfer, after warmup (stabilizes kernels/allocations).
     maybe_init_cuda_graph_runner(generator, past_key_values, draft_past_key_values, args.device, args.warmup_iter)
 
     # Evaluate dataset
     log_file = os.path.join(log_dir, f"0.jsonl")
-    tput_list, tacc_list, draft_time_list, target_time_list = [], [], [], []
+    tput_list, tacc_list = [], []
+    total_iter = 0
+    total_draft_time = 0.0
+    total_target_time = 0.0
     post_verify_count_list, speculate_count_list = [], []
     for idx, query in tqdm(enumerate(dataset), total=len(dataset), desc="Evaluating", leave=True):
         tokenizer.use_default_system_prompt = True
@@ -53,14 +56,13 @@ def run_agent_eval(generator, tokenizer, past_key_values, draft_past_key_values,
             json.dump(exp_log, f, indent=4)
             f.write("\n")
 
-        if exp_log.get("tput", None) is not None:
-            tput_list.append(exp_log.get("tput", 0))
-        if exp_log.get("avg_sampled", None) is not None:
-            tacc_list.append(exp_log.get("avg_sampled", 0))
-        if exp_log.get("avg_draft_time", None) is not None:
-            draft_time_list.append(exp_log.get("avg_draft_time", 0))
-        if exp_log.get("avg_target_time", None) is not None:
-            target_time_list.append(exp_log.get("avg_target_time", 0))
+        n_iter = exp_log["n_iter"]
+        total_iter += n_iter
+        total_draft_time += exp_log["avg_draft_time"] * n_iter
+        total_target_time += exp_log["avg_target_time"] * n_iter
+
+        tput_list.append(exp_log["tput"])
+        tacc_list.append(exp_log["avg_sampled"])
         if exp_log.get("post_verify_count", None) is not None:
             post_verify_count_list.append(exp_log.get("post_verify_count", 0))
         if exp_log.get("speculate_count", None) is not None:
@@ -72,7 +74,8 @@ def run_agent_eval(generator, tokenizer, past_key_values, draft_past_key_values,
     print(f"Final Results:")
     tput_mean, tput_std = np.mean(tput_list), np.std(tput_list)
     tacc_mean, tacc_std = np.mean(tacc_list), np.std(tacc_list) if tacc_list else 0
-    avg_draft_time, avg_target_time = np.mean(draft_time_list), np.mean(target_time_list)
+    avg_draft_time = (total_draft_time / total_iter) if total_iter > 0 else 0
+    avg_target_time = (total_target_time / total_iter) if total_iter > 0 else 0
     peak_mem = torch.cuda.max_memory_reserved(args.device)/(1024**3)
     post_verify_rate = np.sum(post_verify_count_list) / (np.sum(post_verify_count_list) + np.sum(speculate_count_list)) if (np.sum(post_verify_count_list) + np.sum(speculate_count_list)) > 0 else 0
     
@@ -83,8 +86,6 @@ def run_agent_eval(generator, tokenizer, past_key_values, draft_past_key_values,
     print(f"\tPeak Memory: {peak_mem:.3f} GiB")
     if hasattr(generator, 'post_verify_count') and generator.post_verify_count is not None:
         print(f"\tPost-Verify Rate: {post_verify_rate:.3f}")
-    
-    # return tput_mean, tput_std, tacc_mean, tacc_std, avg_draft_time, avg_target_time, peak_mem
     
     return {
         "tput_mean": float(tput_mean),

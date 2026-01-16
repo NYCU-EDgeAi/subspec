@@ -37,6 +37,9 @@ class GeneratorPipelineBuilder:
         
         self.config = config
 
+        self.config_path = getattr(config, "config_path", None)
+        self.settings_snapshot = getattr(config, "settings_snapshot", None)
+
         self.__dict__.update(config.__dict__)
 
         # Normalize recipe from YAML/preset into an actual recipe object.

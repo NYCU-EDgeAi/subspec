@@ -9,6 +9,7 @@ import time
 import json
 from specdecodes.models.utils.wandb_logger import wandb_logger
 from run.pipelines.utils.eval_utils import reset_kv, maybe_init_cuda_graph_runner
+from run.core.config_utils import write_settings_yaml
 
 def main(builder):
     generator, tokenizer, past_kv, draft_past_kv = builder.build()
@@ -74,6 +75,7 @@ def main(builder):
     # Persist a single-run log (mirrors benchmark JSONL style).
     log_dir = os.path.join(args.log_dir, time.strftime("%Y%m%d-%H%M%S"), "run_test")
     os.makedirs(log_dir, exist_ok=True)
+    write_settings_yaml(log_dir, getattr(args, "settings_snapshot", None))
     log_file = os.path.join(log_dir, "0.jsonl")
     exp_log = {
         **wandb_logger.log_data,

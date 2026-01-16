@@ -31,6 +31,7 @@ from .benchmarks.passage_count import load_passage_count_dataset_answer
 from .benchmarks.passage_retrieval_en import load_passage_retrieval_en_dataset_answer
 from .benchmarks.lcc import load_lcc_dataset_answer
 from .benchmarks.repobench_p import load_repobench_p_dataset_answer
+from run.core.config_utils import write_settings_yaml
 
 DATASET_LOADER = {
     "gsm8k":      load_gsm8k_dataset_answer,
@@ -93,10 +94,25 @@ def main(builder, benchmarks=None, max_samples=None):
     logging.basicConfig(level=LOGLEVEL)
     
     # Build bench_list and check if all names are valid
-    bench_list = benchmarks.split(",") if benchmarks is not None else []
+    available_benchmarks = sorted(DATASET_LOADER.keys())
+    if benchmarks is None:
+        raise ValueError(
+            "No benchmarks specified. Use --benchmarks with a comma-separated list. "
+            f"Available benchmarks: {available_benchmarks}"
+        )
+
+    bench_list = [b.strip() for b in benchmarks.split(",") if b.strip()]
+    if not bench_list:
+        raise ValueError(
+            "No benchmarks specified. Use --benchmarks with a comma-separated list. "
+            f"Available benchmarks: {available_benchmarks}"
+        )
+
     for b in bench_list:
         if b not in DATASET_LOADER:
-            raise ValueError(f"Unknown benchmark: {b}. Available benchmarks: {list(DATASET_LOADER.keys())}")
+            raise ValueError(
+                f"Unknown benchmark: {b}. Available benchmarks: {available_benchmarks}"
+            )
     print(f"Benchmarks to run: {bench_list}")
     
     # Handle output directories
@@ -116,6 +132,7 @@ def main(builder, benchmarks=None, max_samples=None):
         log_dir = os.path.join(log_dir_base, bench_name)
         os.makedirs(log_dir, exist_ok=True)
         print(f"Log directory: {log_dir}")
+        write_settings_yaml(log_dir, getattr(args, "settings_snapshot", None))
         
         # Load dataset
         if "longgenbench" in bench_name:
@@ -153,12 +170,6 @@ def main(builder, benchmarks=None, max_samples=None):
         torch.cuda.empty_cache()
         gc.collect()
         torch.cuda.reset_peak_memory_stats()
-        if hasattr(generator, "judge_acc_len_list"):
-            # print("acc_list:", generator.judge_acc_len_list)
-            tacc_judge_value = np.mean(generator.judge_acc_len_list)
-        else:
-            tacc_judge_value = 0
-
         # Write results to file
         # with open(os.path.join(log_dir, "results.jsonl"), 'a+') as f:
         #     json.dump({

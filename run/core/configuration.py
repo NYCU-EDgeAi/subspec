@@ -44,6 +44,10 @@ class AppConfig:
     out_dir: Optional[str] = None
     log_dir: str = "experiments"
 
+    # Settings snapshot (resolved config + CLI context)
+    config_path: Optional[str] = None
+    settings_snapshot: Optional[Dict[str, Any]] = None
+
     # Research toggles (set via YAML/CLI)
     detailed_analysis: bool = False
     nvtx_profiling: bool = False

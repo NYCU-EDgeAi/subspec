@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import importlib
-from typing import Any, Dict
+import os
+from typing import Any, Dict, Optional
 
 
 def load_symbol(path: str):
@@ -59,3 +60,29 @@ def instantiate_recipe(recipe_spec: Any):
 
     cls = load_symbol(class_path)
     return cls(**kwargs) if kwargs else cls()
+
+
+def dump_yaml(path: str, data: Dict[str, Any]) -> None:
+    try:
+        import yaml
+    except Exception as e:
+        raise RuntimeError(
+            "PyYAML is required to write settings snapshots. Install it with `pip install pyyaml`."
+        ) from e
+
+    with open(path, "w", encoding="utf-8") as f:
+        yaml.safe_dump(data, f, sort_keys=False, default_flow_style=False)
+
+
+def write_settings_yaml(
+    log_dir: str,
+    settings_snapshot: Optional[Dict[str, Any]],
+    filename: str = "settings.yaml",
+) -> Optional[str]:
+    if not settings_snapshot:
+        return None
+
+    os.makedirs(log_dir, exist_ok=True)
+    path = os.path.join(log_dir, filename)
+    dump_yaml(path, settings_snapshot)
+    return path

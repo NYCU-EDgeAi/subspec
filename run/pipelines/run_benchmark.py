@@ -34,6 +34,7 @@ from .benchmarks.passage_count import load_passage_count_dataset
 from .benchmarks.passage_retrieval_en import load_passage_retrieval_en_dataset
 from .benchmarks.lcc import load_lcc_dataset
 from .benchmarks.repobench_p import load_repobench_p_dataset
+from run.core.config_utils import write_settings_yaml
 
 DATASET_LOADER = {
     "mt-bench": load_mtbench_dataset,
@@ -49,7 +50,6 @@ DATASET_LOADER = {
     "narrativeqa": load_narrativeqa_dataset,
     "qasper": load_qasper_dataset,
     "multifieldqa_en": load_multifieldqa_en_dataset,
-    "hotpotqa": load_hotpotqa_dataset,
     "2wikimqa": load_2wikimqa_dataset,
     "musique": load_musique_dataset,  
     "gov_report": load_gov_report_dataset,
@@ -134,6 +134,7 @@ def main(builder, benchmarks=None, max_samples=None):
         log_dir = os.path.join(log_dir_base, bench_name)
         os.makedirs(log_dir, exist_ok=True)
         print(f"Log directory: {log_dir}")
+        write_settings_yaml(log_dir, getattr(args, "settings_snapshot", None))
         
         # Load dataset
         dataset = DATASET_LOADER[bench_name]()

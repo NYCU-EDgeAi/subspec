@@ -7,6 +7,26 @@ import prettytable as pt
 import csv
 from .wandb_logger import wandb_logger
 
+_PROFILE_LOG_DEFAULTS = {
+    "avg_draft_time": 0.0,
+    "avg_target_time": 0.0,
+    "avg_verify_time": 0.0,
+    "avg_sampled": 0.0,
+    "n_iter": 0,
+    "n_tokens": 0,
+    "elapsed_time": 0.0,
+    "tput": 0.0,
+    "post_verify_count": 0,
+    "speculate_count": 0,
+    "post_verify_rate": 0.0,
+}
+
+
+def _commit_profile_log(values: dict) -> None:
+    wandb_logger.log_data.update(values)
+    for key, default in _PROFILE_LOG_DEFAULTS.items():
+        wandb_logger.log_data.setdefault(key, default)
+
 class ProfilingMixin:
     def __init__(self, *args, profiling: bool = True, profiling_verbose: bool = False, **kwargs):
         self.profiling = profiling
@@ -37,9 +57,19 @@ class ProfilingMixin:
         n_generated_tokens = output_ids.shape[1] - org_input_len
         throughput = n_generated_tokens / elapsed_time_s if elapsed_time_s > 0 else 0
 
-        wandb_logger.log_data['n_tokens'] = n_generated_tokens
-        wandb_logger.log_data['elapsed_time'] = elapsed_time_s
-        wandb_logger.log_data['tput'] = throughput
+        n_iter = int(n_generated_tokens)
+        _commit_profile_log(
+            {
+                "n_tokens": n_generated_tokens,
+                "elapsed_time": elapsed_time_s,
+                "tput": throughput,
+                "n_iter": n_iter,
+                "avg_draft_time": 0.0,
+                "avg_verify_time": 0.0,
+                "avg_target_time": (elapsed_time_s / n_iter) if n_iter > 0 else 0.0,
+                "avg_sampled": 1.0 if n_iter > 0 else 0.0,
+            }
+        )
 
         if self.profiling_verbose:
             logging.info(
@@ -286,15 +316,20 @@ class SDProfilingMixin:
                 
         # save exp_log
         avg_draft_s, avg_target_s, avg_verify_s = self.compute_average_times()
-        wandb_logger.log_data['avg_draft_time'] = avg_draft_s
-        wandb_logger.log_data['avg_target_time'] = avg_target_s
-        wandb_logger.log_data['avg_verify_time'] = avg_verify_s
-        
-        wandb_logger.log_data['avg_sampled'] = avg_sampled
-        wandb_logger.log_data['n_iter'] = total_iterations
-        wandb_logger.log_data['n_tokens'] = len(input_ids[0][org_input_len:])
-        wandb_logger.log_data['elapsed_time'] = elapsed_time_s
-        wandb_logger.log_data['tput'] = len(input_ids[0][org_input_len:]) / elapsed_time_s
+        n_tokens = len(input_ids[0][org_input_len:])
+        tput = (n_tokens / elapsed_time_s) if elapsed_time_s > 0 else 0.0
+        _commit_profile_log(
+            {
+                "avg_draft_time": avg_draft_s,
+                "avg_target_time": avg_target_s,
+                "avg_verify_time": avg_verify_s,
+                "avg_sampled": avg_sampled,
+                "n_iter": total_iterations,
+                "n_tokens": n_tokens,
+                "elapsed_time": elapsed_time_s,
+                "tput": tput,
+            }
+        )
 
         # Optional: speculative decoding counters.
         # Some generators expose these; log them whenever present.
@@ -304,11 +339,14 @@ class SDProfilingMixin:
             post_verify_count = int(post_verify_count)
             speculate_count = int(speculate_count)
 
-            wandb_logger.log_data['post_verify_count'] = post_verify_count
-            wandb_logger.log_data['speculate_count'] = speculate_count
-
             denom = post_verify_count + speculate_count
-            wandb_logger.log_data['post_verify_rate'] = (float(post_verify_count) / float(denom)) if denom > 0 else 0.0
+            _commit_profile_log(
+                {
+                    "post_verify_count": post_verify_count,
+                    "speculate_count": speculate_count,
+                    "post_verify_rate": (float(post_verify_count) / float(denom)) if denom > 0 else 0.0,
+                }
+            )
 
         if wandb_logger.get_flag("detailed_analysis", False):
             wandb_logger.log_data['detailed_analysis'] = getattr(self, 'detaild_data', [])

@@ -1,6 +1,13 @@
 import os
 import json
 import re
+import base64
+import zlib
+import pickle
+import subprocess
+import tempfile
+import time
+from typing import Any, List, Dict
 import numpy as np
 import torch
 import gc
@@ -45,6 +52,108 @@ dataset2metric = {
     "repobench_p": code_sim_score,
 }
 
+def _run_warmup(
+    generator,
+    tokenizer,
+    past_key_values,
+    draft_past_key_values,
+    args,
+    warmup_prompt,
+    max_length=None,
+    max_new_tokens=None,
+    warmup_iter=None,
+    show_progress=False,
+):
+    original_profiling = generator.profiling
+    generator.profiling = False
+    n_iter = args.warmup_iter if warmup_iter is None else warmup_iter
+    if n_iter <= 0:
+        generator.profiling = original_profiling
+        return
+
+    iterator = tqdm(range(n_iter), desc="Warming up") if show_progress else range(n_iter)
+    for _ in iterator:
+        tokenizer.use_default_system_prompt = True
+        warmup_ids = tokenizer.apply_chat_template(
+            [{"role": "user", "content": warmup_prompt}],
+            tokenize=True, add_generation_prompt=True, return_tensors="pt"
+        ).to(generator.device)
+
+        gen_kwargs = dict(
+            temperature=args.temperature,
+            do_sample=args.do_sample,
+            past_key_values=past_key_values,
+            draft_past_key_values=draft_past_key_values,
+        )
+        if max_new_tokens is not None:
+            gen_kwargs["max_new_tokens"] = max_new_tokens
+        else:
+            gen_kwargs["max_length"] = max_length if max_length is not None else args.max_length
+
+        with sdpa_kernel(backends=[SDPBackend.MATH]):
+            generator.generate(warmup_ids, **gen_kwargs)
+
+        reset_kv(past_key_values, draft_past_key_values)
+
+    generator.profiling = original_profiling
+
+
+def _init_perf():
+    return {
+        "tput_list": [],
+        "tacc_list": [],
+        "total_iter": 0,
+        "total_draft_time": 0.0,
+        "total_target_time": 0.0,
+    }
+
+
+def _accum_perf(perf, record):
+    perf["tput_list"].append(record["tput"])
+    perf["tacc_list"].append(record["avg_sampled"])
+    n_iter = record["n_iter"]
+    perf["total_iter"] += n_iter
+    perf["total_draft_time"] += record["avg_draft_time"] * n_iter
+    perf["total_target_time"] += record["avg_target_time"] * n_iter
+
+
+def _finalize_perf(perf, generator):
+    tput_list = perf["tput_list"]
+    tacc_list = perf["tacc_list"]
+    total_iter = perf["total_iter"]
+    total_draft_time = perf["total_draft_time"]
+    total_target_time = perf["total_target_time"]
+
+    tput_mean, tput_std = (np.mean(tput_list), np.std(tput_list)) if tput_list else (0, 0)
+    tacc_mean, tacc_std = (np.mean(tacc_list), np.std(tacc_list)) if tacc_list else (0, 0)
+    avg_draft_time = (total_draft_time / total_iter) if total_iter > 0 else 0
+    avg_target_time = (total_target_time / total_iter) if total_iter > 0 else 0
+    peak_memory = torch.cuda.max_memory_reserved(generator.device) / (1024 ** 3)
+
+    return {
+        "tput_mean": float(tput_mean),
+        "tput_std": float(tput_std),
+        "tacc_mean": float(tacc_mean),
+        "tacc_std": float(tacc_std),
+        "avg_draft_time": float(avg_draft_time),
+        "avg_target_time": float(avg_target_time),
+        "peak_memory_gib": float(peak_memory),
+    }
+
+
+def _print_summary(title, perf_stats, accuracy=None, correct_q=None, total_q=None):
+    print(f"Final {title} Results:")
+    print(f"\tThroughput       : {perf_stats['tput_mean']:.3f} ± {perf_stats['tput_std']:.3f} tokens/sec")
+    print(f"\tToken Acceptance : {perf_stats['tacc_mean']:.3f} ± {perf_stats['tacc_std']:.3f}")
+    if accuracy is not None:
+        if correct_q is not None and total_q is not None:
+            print(f"\tAnswer Accuracy  : {accuracy:.3f} ({correct_q}/{total_q})")
+        else:
+            print(f"\tAnswer Accuracy  : {accuracy:.3f}")
+    print(f"\tAvg Draft Time   : {perf_stats['avg_draft_time']:.3f} sec")
+    print(f"\tAvg Target Time  : {perf_stats['avg_target_time']:.3f} sec")
+    print(f"\tPeak Memory      : {perf_stats['peak_memory_gib']:.3f} GiB")
+
 def run_gsm8k_eval(generator, tokenizer, past_key_values, draft_past_key_values, args, dataset, log_dir):
     """
     Evaluate GSM8K dataset accuracy alongside performance metrics.
@@ -66,38 +175,22 @@ def run_gsm8k_eval(generator, tokenizer, past_key_values, draft_past_key_values,
          answer_accuracy, avg_draft_time, avg_target_time, peak_memory)
     """
 
-    # 1. Warm-up (identical to original implementation)
-    original_profiling = generator.profiling
-    generator.profiling = False
-    for _ in range(args.warmup_iter):
-        warmup_prompt = "Solve this math problem. Give the reasoning steps ...\nWhat is 1 + 1?"
-        tokenizer.use_default_system_prompt = True
-        warmup_ids = tokenizer.apply_chat_template(
-            [{"role": "user", "content": warmup_prompt}],
-            tokenize=True, add_generation_prompt=True, return_tensors="pt"
-        ).to(generator.device)
-
-        with sdpa_kernel(backends=[SDPBackend.MATH]):
-            generator.generate(
-                warmup_ids,
-                temperature=args.temperature,
-                max_length=args.max_length,
-                do_sample=args.do_sample,
-                past_key_values=past_key_values,
-                draft_past_key_values=draft_past_key_values
-            )
-
-        reset_kv(past_key_values, draft_past_key_values)
-    generator.profiling = original_profiling
+    warmup_prompt = "Solve this math problem. Give the reasoning steps ...\nWhat is 1 + 1?"
+    _run_warmup(
+        generator,
+        tokenizer,
+        past_key_values,
+        draft_past_key_values,
+        args,
+        warmup_prompt,
+        max_length=args.max_length,
+    )
 
     # 2. Main evaluation loop
     log_file = os.path.join(log_dir, "0.jsonl")
 
     # Lists to accumulate throughput, token acceptance, draft/target times
-    tput_list = []
-    tacc_list = []  # average token acceptance rate per sample
-    draft_times = []
-    target_times = []
+    perf = _init_perf()
 
     # Counters for overall question accuracy
     total_q = 0
@@ -167,14 +260,7 @@ def run_gsm8k_eval(generator, tokenizer, past_key_values, draft_past_key_values,
         record["Accuracy"] = int(is_correct)
 
         # Append metrics lists
-        if record.get("tput") is not None:
-            tput_list.append(record.get("tput", 0))
-        if record.get("avg_sampled") is not None:
-            tacc_list.append(record.get("avg_sampled", 0))
-        if record.get("avg_draft_time") is not None:
-            draft_times.append(record.get("avg_draft_time", 0))
-        if record.get("avg_target_time") is not None:
-            target_times.append(record.get("avg_target_time", 0))
+        _accum_perf(perf, record)
 
         # Write JSONL entry
         with open(log_file, "a+") as f:
@@ -187,36 +273,14 @@ def run_gsm8k_eval(generator, tokenizer, past_key_values, draft_past_key_values,
         torch.cuda.empty_cache()
 
     # 3. Aggregate overall metrics
-    tput_mean, tput_std = (np.mean(tput_list), np.std(tput_list)) if tput_list else (0, 0)
-    tacc_mean, tacc_std = (np.mean(tacc_list), np.std(tacc_list)) if tacc_list else (0, 0)
     answer_accuracy = correct_q / total_q if total_q > 0 else 0
-    avg_draft = np.mean(draft_times) if draft_times else 0
-    avg_target = np.mean(target_times) if target_times else 0
-    peak_memory = torch.cuda.max_memory_reserved(generator.device) / (1024 ** 3)
-
-    # 4. Print summary
-    print("Final GSM8K Results:")
-    print(f"\tThroughput       : {tput_mean:.3f} ± {tput_std:.3f} tokens/sec")
-    print(f"\tToken Acceptance : {tacc_mean:.3f} ± {tacc_std:.3f}")
-    print(f"\tAnswer Accuracy  : {answer_accuracy:.3f} ({correct_q}/{total_q})")
-    print(f"\tAvg Draft Time   : {avg_draft:.3f} sec")
-    print(f"\tAvg Target Time  : {avg_target:.3f} sec")
-    print(f"\tPeak Memory      : {peak_memory:.3f} GiB")
-    if hasattr(generator, "judge_acc_len_list"):
-        print(f"\tTacc_judge       : {np.mean(generator.judge_acc_len_list):.3f}")
-    else:
-        print("\tTacc_judge       : 0.000 (not available)")
+    perf_stats = _finalize_perf(perf, generator)
+    _print_summary("GSM8K", perf_stats, accuracy=answer_accuracy, correct_q=correct_q, total_q=total_q)
 
     # 5. Return metrics as a JSON-serializable dict for better scalability
     return {
-        "tput_mean": float(tput_mean),
-        "tput_std": float(tput_std),
-        "tacc_mean": float(tacc_mean),
-        "tacc_std": float(tacc_std),
+        **perf_stats,
         "accuracy": float(answer_accuracy),
-        "avg_draft_time": float(avg_draft),
-        "avg_target_time": float(avg_target),
-        "peak_memory_gib": float(peak_memory),
     }
 
 def run_aime_eval(generator, tokenizer,
@@ -241,36 +305,22 @@ def run_aime_eval(generator, tokenizer,
          answer_accuracy, avg_draft_time, avg_target_time, peak_memory)
     """
 
-    # 1. Warm‑up
-    original_profiling = generator.profiling
-    generator.profiling = False
-    for _ in range(args.warmup_iter):
-        warmup_prompt = "Solve this math problem. Give the reasoning steps ...\nWhat is 1 + 1?"
-        tokenizer.use_default_system_prompt = True
-        warmup_ids = tokenizer.apply_chat_template(
-            [{"role":"user","content":warmup_prompt}],
-            tokenize=True, add_generation_prompt=True, return_tensors="pt"
-        ).to(generator.device)
-
-        with sdpa_kernel(backends=[SDPBackend.MATH]):
-            generator.generate(
-                warmup_ids,
-                temperature=args.temperature,
-                max_length=args.max_length,
-                do_sample=args.do_sample,
-                past_key_values=past_key_values,
-                draft_past_key_values=draft_past_key_values
-            )
-
-        reset_kv(past_key_values, draft_past_key_values)
-    generator.profiling = original_profiling
+    warmup_prompt = "Solve this math problem. Give the reasoning steps ...\nWhat is 1 + 1?"
+    _run_warmup(
+        generator,
+        tokenizer,
+        past_key_values,
+        draft_past_key_values,
+        args,
+        warmup_prompt,
+        max_length=args.max_length,
+    )
 
     # 2. Main loop
     os.makedirs(log_dir, exist_ok=True)
     log_file = os.path.join(log_dir, "aime_eval.jsonl")
 
-    tput_list, tacc_list = [], []
-    draft_times, target_times = [], []
+    perf = _init_perf()
     total_q, correct_q = 0, 0
     int_regex = re.compile(r"[-+]?\d+")
 
@@ -324,10 +374,7 @@ def run_aime_eval(generator, tokenizer,
         record["Accuracy"] = int(is_correct)
 
         # Aggregate perf metrics
-        if record.get("tput") is not None:       tput_list.append(record["tput"])
-        if record.get("avg_sampled") is not None: tacc_list.append(record["avg_sampled"])
-        if record.get("avg_draft_time") is not None: draft_times.append(record["avg_draft_time"])
-        if record.get("avg_target_time") is not None: target_times.append(record["avg_target_time"])
+        _accum_perf(perf, record)
 
         # Log per sample
         with open(log_file, "a+") as f:
@@ -340,34 +387,16 @@ def run_aime_eval(generator, tokenizer,
         torch.cuda.empty_cache()
 
     # 3. Aggregate overall
-    tput_mean, tput_std = (np.mean(tput_list), np.std(tput_list)) if tput_list else (0,0)
-    tacc_mean, tacc_std = (np.mean(tacc_list), np.std(tacc_list)) if tacc_list else (0,0)
     accuracy = correct_q / total_q if total_q else 0
-    avg_draft  = np.mean(draft_times)  if draft_times  else 0
-    avg_target = np.mean(target_times) if target_times else 0
-    peak_mem   = torch.cuda.max_memory_reserved(generator.device) / (1024**3)
-
-    print("Final AIME Results:")
-    print(f"\tThroughput       : {tput_mean:.3f} ± {tput_std:.3f} tokens/sec")
-    print(f"\tToken Acceptance : {tacc_mean:.3f} ± {tacc_std:.3f}")
-    print(f"\tAnswer Accuracy  : {accuracy:.3f} ({correct_q}/{total_q})")
-    print(f"\tAvg Draft Time   : {avg_draft:.3f} sec")
-    print(f"\tAvg Target Time  : {avg_target:.3f} sec")
-    print(f"\tPeak Memory      : {peak_mem:.3f} GiB")
+    perf_stats = _finalize_perf(perf, generator)
+    _print_summary("AIME", perf_stats, accuracy=accuracy, correct_q=correct_q, total_q=total_q)
 
     # Return JSON-like dict for scalability
     return {
-        "tput_mean": float(tput_mean),
-        "tput_std": float(tput_std),
-        "tacc_mean": float(tacc_mean),
-        "tacc_std": float(tacc_std),
+        **perf_stats,
         "accuracy": float(accuracy),
-        "avg_draft_time": float(avg_draft),
-        "avg_target_time": float(avg_target),
-        "peak_memory_gib": float(peak_mem),
     }
 
-# WARNING: This function is NOT ready
 def run_mmlu_pro_eval(generator, tokenizer,
                       past_key_values, draft_past_key_values,
                       args, dataset, log_dir):
@@ -375,34 +404,24 @@ def run_mmlu_pro_eval(generator, tokenizer,
     Evaluate MMLU‑Pro multiple‑choice accuracy + perf metrics.
     `dataset` should be the list from load_mmlu_pro_dataset_answer().
     """
-    # 1. Warmup
-    orig_prof = generator.profiling
-    generator.profiling = False
     warmup = "What is 1 + 1?"
     warmup_prompt = f"{warmup}\n\nA. 0\nB. 1\nC. 2\nD. 3\nE. 4\nF. 5\nG. 6\nH. 7\nI. 8\nJ. 9\n\nAnswer:"
-    for _ in range(args.warmup_iter):
-        tokenizer.use_default_system_prompt = True
-        ids = tokenizer.apply_chat_template(
-            [{"role":"user","content":warmup_prompt}],
-            tokenize=True, add_generation_prompt=True, return_tensors="pt"
-        ).to(generator.device)
-        with sdpa_kernel(backends=[SDPBackend.MATH]):
-            generator.generate(
-                ids, temperature=args.temperature,
-                max_length=args.max_length, do_sample=args.do_sample,
-                past_key_values=past_key_values,
-                draft_past_key_values=draft_past_key_values
-            )
-        reset_kv(past_key_values, draft_past_key_values)
-    generator.profiling = orig_prof
+    _run_warmup(
+        generator,
+        tokenizer,
+        past_key_values,
+        draft_past_key_values,
+        args,
+        warmup_prompt,
+        max_length=args.max_length,
+    )
 
     # 2. Main loop
     os.makedirs(log_dir, exist_ok=True)
     log_file = os.path.join(log_dir, "mmlu_pro.jsonl")
 
     letter_re = re.compile(r"\b([A-J])\b")
-    tput_list, tacc_list = [], []
-    draft_times, target_times = [], []
+    perf = _init_perf()
     total_q, correct_q = 0, 0
 
     for idx, entry in tqdm(enumerate(dataset), total=len(dataset), desc="Eval MMLU‑Pro"):
@@ -448,10 +467,7 @@ def run_mmlu_pro_eval(generator, tokenizer,
             "peak_memory": torch.cuda.max_memory_reserved(generator.device) / (1024**3)
         }
         # perf lists
-        if record.get("tput")        is not None: tput_list.append(record["tput"])
-        if record.get("avg_sampled") is not None: tacc_list.append(record["avg_sampled"])
-        if record.get("avg_draft_time"): draft_times.append(record["avg_draft_time"])
-        if record.get("avg_target_time"): target_times.append(record["avg_target_time"])
+        _accum_perf(perf, record)
 
         with open(log_file, "a+") as f:
             json.dump(record, f); f.write("\n")
@@ -462,45 +478,17 @@ def run_mmlu_pro_eval(generator, tokenizer,
         torch.cuda.empty_cache()
 
     # 3. Aggregate
-    tput_mean, tput_std = (np.mean(tput_list), np.std(tput_list)) if tput_list else (0,0)
-    tacc_mean, tacc_std = (np.mean(tacc_list), np.std(tacc_list)) if tacc_list else (0,0)
     accuracy = correct_q/total_q if total_q else 0
-    avg_draft_time  = np.mean(draft_times)  if draft_times  else 0
-    avg_target_time = np.mean(target_times) if target_times else 0
-    peak_mem   = torch.cuda.max_memory_reserved(generator.device)/(1024**3)
-
-    print("Final MMLU‑Pro Results:")
-    print(f"\tThroughput       : {tput_mean:.3f} ± {tput_std:.3f} tokens/sec")
-    print(f"\tToken Acceptance : {tacc_mean:.3f} ± {tacc_std:.3f}")
-    print(f"\tAnswer Accuracy  : {accuracy:.3f} ({correct_q}/{total_q})")
-    print(f"\tAvg Draft Time   : {avg_draft_time:.3f} sec")
-    print(f"\tAvg Target Time  : {avg_target_time:.3f} sec")
-    print(f"\tPeak Memory      : {peak_mem:.3f} GiB")
+    perf_stats = _finalize_perf(perf, generator)
+    _print_summary("MMLU‑Pro", perf_stats, accuracy=accuracy, correct_q=correct_q, total_q=total_q)
 
     # Return JSON-like dict for scalability
     return {
-        "tput_mean": float(tput_mean),
-        "tput_std": float(tput_std),
-        "tacc_mean": float(tacc_mean),
-        "tacc_std": float(tacc_std),
+        **perf_stats,
         "accuracy": float(accuracy),
-        "avg_draft_time": float(avg_draft_time),
-        "avg_target_time": float(avg_target_time),
-        "peak_memory_gib": float(peak_mem),
     }
 
 
-
-import re
-import json
-import base64
-import zlib
-import pickle
-import subprocess
-import os
-import tempfile
-from typing import Any, List, Dict
-import time
 
 # --- Utility functions consolidated from lcb_runner ---
 
@@ -616,13 +604,7 @@ def run_livecodebench_eval(
 
 
     # === 2) Main loop (Simplified) ===
-    tput_list, tacc_list = [], []
-    draft_times, target_times = [], []
-
-    totals, corrects = [], []
-    easy_totals, easy_corrects = [], []
-    med_totals, med_corrects = [], []
-    hard_totals, hard_corrects = [], []
+    perf = _init_perf()
 
     for i, problem in tqdm(enumerate(dataset), total=len(dataset), desc="Evaluating LiveCodeBench"):
         prompt = problem["prompt"] # Use the prompt from the loaded data
@@ -638,10 +620,7 @@ def run_livecodebench_eval(
 
         graded_list = []
         responses = []
-        timings = []
-
         for s in range(n_samples):
-            start = time.time()
             with sdpa_kernel(backends=[SDPBackend.MATH]):
                 output_ids = generator.generate(
                     input_ids,
@@ -651,7 +630,6 @@ def run_livecodebench_eval(
                     past_key_values=past_key_values,
                     draft_past_key_values=draft_past_key_values
                 )
-            gen_time = time.time() - start
 
             reset_kv(past_key_values, draft_past_key_values)
 
@@ -662,8 +640,6 @@ def run_livecodebench_eval(
 
             result = check_correctness(problem=problem, completion=response, timeout=test_timeout)
             graded_list.append(result["passed"])
-            
-            timings.append(gen_time)
 
         pass1 = int(graded_list[0] if graded_list else 0)
         
@@ -681,21 +657,13 @@ def run_livecodebench_eval(
             "peak_memory": torch.cuda.max_memory_reserved(generator.device) / (1024 ** 3)
         }
 
-    tput_mean, tput_std = (np.mean(tput_list), np.std(tput_list)) if tput_list else (0, 0)
-    tacc_mean, tacc_std = (np.mean(tacc_list), np.std(tacc_list)) if tacc_list else (0, 0)
-    avg_draft_time = np.mean(draft_times) if draft_times else 0
-    avg_target_time = np.mean(target_times) if target_times else 0
-    peak_memory = torch.cuda.max_memory_reserved(generator.device) / (1024 ** 3)
+        _accum_perf(perf, record)
+
+    perf_stats = _finalize_perf(perf, generator)
 
     # Return JSON-like dict for scalability
     return {
-        "tput_mean": float(tput_mean),
-        "tput_std": float(tput_std),
-        "tacc_mean": float(tacc_mean),
-        "tacc_std": float(tacc_std),
-        "avg_draft_time": float(avg_draft_time),
-        "avg_target_time": float(avg_target_time),
-        "peak_memory_gib": float(peak_memory),
+        **perf_stats,
     }
 
 # For longbench
@@ -705,123 +673,44 @@ def run_longbench_eval(generator, tokenizer, past_key_values, draft_past_key_val
     Ex. "narrativeqa", "qasper", "multifieldqa_en", "hotpotqa", "2wikimqa", "musique", 
         "gov_report", "qmsum", "multi_news",  "trec", "triviaqa", "samsum",
         "passage_count", "passage_retrieval_en",  "lcc", "repobench_p"
-
-    Args:
-        generator: the model generator instance
-        tokenizer: tokenizer with chat template functionality
-        past_key_values: primary past key values for autoregressive generation
-        draft_past_key_values: draft past key values for speculative decoding (optional)
-        args: namespace containing temperature, max_length, do_sample, warmup_iter
-        dataset: list of dicts, each with keys:
-            "question": the prompt string
-            "answer": full original answer text from longbench (with reasoning and final line "Answer: N")
-        log_dir: directory path for writing per-sample JSONL logs
-        bench_name: name of benchmarks Ex. "narrativeqa", "qasper"...
-        max_len: max_len of LLM Ex. llama3: 127500
-
-    Returns:
-        A tuple of metrics:
-        (tput_mean, tput_std, tacc_mean, tacc_std,
-         answer_accuracy, avg_draft_time, avg_target_time, peak_memory)
     """
     print("bench name", bench_name)
-    
-    # 0. load max_length limit for longbench eval
+
     with open("run/pipelines/benchmarks/utils/config/dataset2maxlen.json", "r", encoding="utf-8") as f:
         benchmark_max_len = json.load(f)
 
-    if bench_name in benchmark_max_len:
-        max_new_tokens = benchmark_max_len[bench_name]
-    else: 
-        max_new_tokens = args.max_length
+    max_new_tokens = benchmark_max_len.get(bench_name, args.max_length)
 
-    # 1. Warm-up (identical to original implementation)
-    original_profiling = generator.profiling
-    generator.profiling = False
-    for _ in tqdm(range(args.warmup_iter)):
-        warmup_prompt = "Solve this math problem. Give the reasoning steps ...\nWhat is 1 + 1?" * 64
-        tokenizer.use_default_system_prompt = True
-        
-        # if bench_name not in ["trec", "triviaqa", "samsum", "lsht", "lcc", "repobench_p"]:
-        #     warmup_prompt = build_chat(warmup_prompt)
-
-        # tokenized_prompt = tokenizer(warmup_prompt, truncation=False, return_tensors="pt").input_ids[0]
-
-        # warmup_ids = tokenizer(warmup_prompt, truncation=False, return_tensors="pt").input_ids.to(generator.device)\
-        warmup_ids = tokenizer.apply_chat_template(
-            [{"role": "user", "content": warmup_prompt}],
-            tokenize=True, add_generation_prompt=True, return_tensors="pt"
-        ).to(generator.device)
-
-        with sdpa_kernel(backends=[SDPBackend.MATH]):
-            generator.generate(
-                warmup_ids,
-                temperature=args.temperature,
-                max_new_tokens=max_new_tokens,
-                do_sample=args.do_sample,
-                past_key_values=past_key_values,
-                draft_past_key_values=draft_past_key_values
-            )
-
-        reset_kv(past_key_values, draft_past_key_values)
-    generator.profiling = original_profiling
+    warmup_prompt = "Solve this math problem. Give the reasoning steps ...\nWhat is 1 + 1?" * 64
+    _run_warmup(
+        generator,
+        tokenizer,
+        past_key_values,
+        draft_past_key_values,
+        args,
+        warmup_prompt,
+        max_new_tokens=max_new_tokens,
+        show_progress=True,
+    )
 
     # Optional CUDA-graph capture for FlashInfer, after warmup (stabilizes kernels/allocations).
     maybe_init_cuda_graph_runner(generator, past_key_values, draft_past_key_values, args.device, args.warmup_iter)
-        
-    # 2. Main evaluation loop
+
     log_file = os.path.join(log_dir, "0.jsonl")
-
-    # Lists to accumulate throughput, token acceptance, draft/target times
-    tput_list = []
-    tacc_list = []  # average token acceptance rate per sample
-    draft_times = []
-    target_times = []
-
-    # Counters for overall question accuracy
+    perf = _init_perf()
     total_q = 0
     correct_q = 0
 
-    # Regex to extract integers from the last line of outputs
-    int_regex = re.compile(r"[-+]?\d+")
-
-    for idx, entry in tqdm(enumerate(dataset), total=len(dataset), desc="Evaluating "+bench_name):
+    for _, entry in tqdm(enumerate(dataset), total=len(dataset), desc=f"Evaluating {bench_name}"):
         prompt = entry["question"]
-        ground_truth_list = entry["answer"]  # includes "[Answer: N, ...]"
-        if 'classes' in entry:
-            all_classes = entry["classes"]
-        else:
-            all_classes = None
+        ground_truth_list = entry["answer"]
+        all_classes = entry.get("classes", None)
 
-        # 2.1 Generate model output IDs (same as original)
         tokenizer.use_default_system_prompt = True
-        
-        # old
-        # ----------------------------------------------------------
-        # if bench_name not in ["trec", "triviaqa", "samsum", "lsht", "lcc", "repobench_p"]:
-        #     prompt = build_chat(prompt)
-    
-        # tokenized_prompt = tokenizer(prompt, truncation=False, return_tensors="pt").input_ids[0]
-        # min_length = args.min_length if hasattr(args, "min_length") else 0
-        # if len(tokenized_prompt) > args.max_length or len(tokenized_prompt) < min_length:
-        #     print(f"len(tokenized_prompt) = {len(tokenized_prompt)}, Skip it!")
-        #     continue
-        # elif len(tokenized_prompt) > max_len:
-        #     half = max_len//2
-        #     #prompt = tokenizer.decode(tokenized_prompt[:half], skip_special_tokens=True)+tokenizer.decode(tokenized_prompt[-half:], skip_special_tokens=True)
-        #     tokenized_prompt = torch.cat([tokenized_prompt[:half], tokenized_prompt[-half:]], dim=0)
-
-        # #input_ids = tokenizer(prompt, truncation=False, return_tensors="pt").input_ids.to(generator.device)
-        # input_ids = tokenized_prompt.unsqueeze(0).to(generator.device)
-        # ----------------------------------------------------------
-
-        # new
-        # ----------------------------------------------------------
         input_ids = tokenizer.apply_chat_template(
             [{"role": "user", "content": prompt}],
             tokenize=True, add_generation_prompt=True, return_tensors="pt"
         ).to(generator.device)
-        # ----------------------------------------------------------
 
         with sdpa_kernel(backends=[SDPBackend.MATH]):
             output_ids = generator.generate(
@@ -830,32 +719,26 @@ def run_longbench_eval(generator, tokenizer, past_key_values, draft_past_key_val
                 max_new_tokens=max_new_tokens,
                 do_sample=args.do_sample,
                 past_key_values=past_key_values,
-                draft_past_key_values=draft_past_key_values
+                draft_past_key_values=draft_past_key_values,
             )
 
         reset_kv(past_key_values, draft_past_key_values)
 
-        # 2.2 Extract original performance logs
-        record = {**generator.exp_log}
+        record = {**wandb_logger.log_data}
         record.update({
             "query": prompt,
             "response": tokenizer.decode(
                 output_ids[0][input_ids.shape[1]:], skip_special_tokens=True
             ),
             "answer": ground_truth_list,
-            "peak_memory": torch.cuda.max_memory_reserved(generator.device) / (1024 ** 3)
+            "peak_memory": torch.cuda.max_memory_reserved(generator.device) / (1024 ** 3),
         })
 
-        # 2.3 Compute per-sample correctness
-        response = tokenizer.decode(
-            output_ids[0][input_ids.shape[1]:], skip_special_tokens=True
-        )
-
+        response = record["response"]
         if bench_name in ["trec", "triviaqa", "samsum", "lsht"]:
-            prediction = response.lstrip('\n').split('\n')[0]
+            prediction = response.lstrip("\n").split("\n")[0]
         else:
             prediction = response
-        
 
         score = 0
         for ground_truth in ground_truth_list:
@@ -863,67 +746,22 @@ def run_longbench_eval(generator, tokenizer, past_key_values, draft_past_key_val
 
         total_q += 1
         correct_q += score
-
-        # Include per-sample Score flag in JSON record
         record["Accuracy"] = score
 
-        # Append metrics lists
-        if record.get("tput") is not None:
-            tput_list.append(record.get("tput", 0))
-        if record.get("avg_sampled") is not None:
-            tacc_list.append(record.get("avg_sampled", 0))
-        if record.get("avg_draft_time") is not None:
-            draft_times.append(record.get("avg_draft_time", 0))
-        if record.get("avg_target_time") is not None:
-            target_times.append(record.get("avg_target_time", 0))
+        _accum_perf(perf, record)
 
-        # Write JSONL entry
         with open(log_file, "a+") as f:
             json.dump(record, f)
             f.write("\n")
 
-        # Clean up
         del input_ids, output_ids
         gc.collect()
         torch.cuda.empty_cache()
 
-    # 3. Aggregate overall metrics
-    tput_mean, tput_std = (np.mean(tput_list), np.std(tput_list)) if tput_list else (0, 0)
-    tacc_mean, tacc_std = (np.mean(tacc_list), np.std(tacc_list)) if tacc_list else (0, 0)
     answer_accuracy = round(100 * correct_q / total_q, 2) if total_q > 0 else 0
-    avg_draft_time = np.mean(draft_times) if draft_times else 0
-    avg_target_time = np.mean(target_times) if target_times else 0
-    peak_memory = torch.cuda.max_memory_reserved(generator.device) / (1024 ** 3)
+    perf_stats = _finalize_perf(perf, generator)
+    _print_summary(bench_name, perf_stats, accuracy=answer_accuracy, correct_q=correct_q, total_q=total_q)
 
-    # 4. Print summary
-    print(f"Final {bench_name} Results:")
-    print(f"\tThroughput       : {tput_mean:.3f} ± {tput_std:.3f} tokens/sec")
-    print(f"\tToken Acceptance : {tacc_mean:.3f} ± {tacc_std:.3f}")
-    print(f"\tAnswer Accuracy  : {answer_accuracy:.3f} ({correct_q}/{total_q})")
-    print(f"\tAvg Draft Time   : {avg_draft_time:.3f} sec")
-    print(f"\tAvg Target Time  : {avg_target_time:.3f} sec")
-    print(f"\tPeak Memory      : {peak_memory:.3f} GiB")
-    if hasattr(generator, "judge_acc_len_list"):
-        print(f"\tTacc_judge       : {np.mean(generator.judge_acc_len_list):.3f}")
-    else:
-        print("\tTacc_judge       : 0.000 (not available)")
-
-    # 5. Return metrics tuple
-    # return (
-    #     tput_mean,
-    #     tput_std,
-    #     tacc_mean,
-    #     tacc_std,
-    #     answer_accuracy,
-    #     avg_draft,
-    #     avg_target,
-    #     peak_memory
-    # )
-    
     return {
-        "tput_mean": float(tput_mean),
-        "tput_std": float(tput_std),
-        "avg_draft_time": float(avg_draft_time),
-        "avg_target_time": float(avg_target_time),
-        "peak_memory_gib": float(peak_memory),
+        **perf_stats,
     }

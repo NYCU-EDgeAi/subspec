@@ -77,6 +77,75 @@ def _draft_params_to_dict(dp) -> Dict[str, Any]:
     return {}
 
 
+def _to_serializable(value: Any) -> Any:
+    if is_dataclass(value):
+        return {k: _to_serializable(v) for k, v in asdict(value).items()}
+    if isinstance(value, dict):
+        return {k: _to_serializable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_to_serializable(v) for v in value]
+    if isinstance(value, (int, float, str, bool)) or value is None:
+        return value
+    return str(value)
+
+
+def _serialize_recipe(recipe: Any) -> Any:
+    if recipe is None:
+        return None
+    if isinstance(recipe, (str, dict)):
+        return _to_serializable(recipe)
+
+    class_path = f"{recipe.__class__.__module__}:{recipe.__class__.__name__}"
+    payload: Dict[str, Any] = {"class_path": class_path}
+    if hasattr(recipe, "__dict__"):
+        payload["kwargs"] = _to_serializable(recipe.__dict__)
+    return payload
+
+
+def _build_settings_snapshot(
+    *,
+    config: "AppConfig",
+    config_path: str | None,
+    subcommand_argv: list[str],
+) -> Dict[str, Any]:
+    generator_kwargs = dict(getattr(config, "generator_kwargs", {}) or {})
+    draft_params = _draft_params_to_dict(getattr(config, "draft_params", None))
+
+    snapshot: Dict[str, Any] = {
+        "config_path": config_path,
+        "subcommand": subcommand_argv[0] if subcommand_argv else None,
+        "subcommand_args": subcommand_argv[1:] if len(subcommand_argv) > 1 else [],
+        "method": getattr(config, "method", None),
+        "llm_path": getattr(config, "llm_path", None),
+        "draft_model_path": getattr(config, "draft_model_path", None),
+        "device": _to_serializable(getattr(config, "device", None)),
+        "dtype": _to_serializable(getattr(config, "dtype", None)),
+        "seed": getattr(config, "seed", None),
+        "max_length": getattr(config, "max_length", None),
+        "do_sample": getattr(config, "do_sample", None),
+        "temperature": getattr(config, "temperature", None),
+        "warmup_iter": getattr(config, "warmup_iter", None),
+        "cache_implementation": getattr(config, "cache_implementation", None),
+        "compile_mode": _to_serializable(getattr(config, "compile_mode", None)),
+        "vram_limit_gb": getattr(config, "vram_limit_gb", None),
+        "cpu_offload_gb": getattr(config, "cpu_offload_gb", None),
+        "generator_profiling": getattr(config, "generator_profiling", None),
+        "profiling_verbose": getattr(config, "profiling_verbose", None),
+        "print_time": getattr(config, "print_time", None),
+        "print_message": getattr(config, "print_message", None),
+        "log_dir": getattr(config, "log_dir", None),
+        "out_dir": getattr(config, "out_dir", None),
+        "detailed_analysis": getattr(config, "detailed_analysis", None),
+        "nvtx_profiling": getattr(config, "nvtx_profiling", None),
+        "nsys_output": getattr(config, "nsys_output", None),
+        "generator_kwargs": _to_serializable(generator_kwargs),
+        "draft_params": _to_serializable(draft_params),
+        "recipe": _serialize_recipe(getattr(config, "recipe", None)),
+    }
+
+    return snapshot
+
+
 def _load_yaml_config(path: str) -> Dict[str, Any]:
     try:
         import yaml
@@ -436,7 +505,7 @@ def main():
     # 1) Parse method + YAML config path first to load defaults
     base_parser = _build_base_parser()
     args, _ = base_parser.parse_known_args()
-    _, yaml_config, method = _load_yaml_and_method(args)
+    config_path, yaml_config, method = _load_yaml_and_method(args)
 
     # If enabled via YAML/CLI, re-exec under Nsight Systems *before* importing heavy GPU code.
     nsys_enabled, nsys_output = _effective_nsys_settings(args, yaml_config)
@@ -485,6 +554,12 @@ def main():
 
     # Allow YAML to specify recipes via import path + kwargs.
     config.recipe = instantiate_recipe(getattr(config, "recipe", None))
+    config.config_path = config_path
+    config.settings_snapshot = _build_settings_snapshot(
+        config=config,
+        config_path=config_path,
+        subcommand_argv=typer_argv,
+    )
     
     # 6. Build pipeline
     # We must patch sys.argv for Typer to work correctly on the subcommands

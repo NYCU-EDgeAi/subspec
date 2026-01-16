@@ -10,6 +10,7 @@ from tqdm import tqdm
 
 from .benchmarks.utils.eval_agent import run_agent_eval
 from .benchmarks.hotpotqa import load_hotpotqa_dataset
+from run.core.config_utils import write_settings_yaml
 
 DATASET_LOADER = {
     "hotpotqa": load_hotpotqa_dataset,
@@ -58,45 +59,7 @@ def main(builder, benchmarks=None, max_samples=None):
         log_dir = os.path.join(log_dir_base, bench_name)
         os.makedirs(log_dir, exist_ok=True)
         print(f"Log directory: {log_dir}")
-
-def main(builder, benchmarks=None, max_samples=None):
-    torch.manual_seed(0)
-    random.seed(0)
-        
-    # Enable profiling, disable logging profiling results
-    builder.generator_profiling = True
-    builder.profiling_verbose = False
-    generator, tokenizer, past_kv, draft_past_kv = builder.build()
-    args = builder.args
-    
-    # set logging level by environment variable
-    LOGLEVEL = os.environ.get("LOGLEVEL", "INFO").upper()
-    logging.basicConfig(level=LOGLEVEL)
-    
-    # Build bench_list and check if all names are valid
-    bench_list = benchmarks.split(",") if benchmarks is not None else []
-    for b in bench_list:
-        if b not in DATASET_LOADER:
-            raise ValueError(f"Unknown benchmark: {b}. Available benchmarks: {list(DATASET_LOADER.keys())}")
-    print(f"Benchmarks to run: {bench_list}")
-    
-    # Handle output directories
-    if args.out_dir is not None:
-        shutil.rmtree(args.out_dir, ignore_errors=True)
-        print(f"Deleted old {args.out_dir}")
-        os.makedirs(args.out_dir, exist_ok=True)
-        
-    # Run benchmarks
-    log_dir_base = os.path.join(args.log_dir, time.strftime("%Y%m%d-%H%M%S"), "run_benchmark_agent")
-    for bench_name in tqdm(bench_list, desc="Running benchmarks"):
-        # fix random seed to 0 for each benchmark for reproducibility
-        torch.manual_seed(0)
-        random.seed(0)
-        
-        # Handle output directories
-        log_dir = os.path.join(log_dir_base, bench_name)
-        os.makedirs(log_dir, exist_ok=True)
-        print(f"Log directory: {log_dir}")
+        write_settings_yaml(log_dir, getattr(args, "settings_snapshot", None))
         
         # Load dataset
         dataset = DATASET_LOADER[bench_name]()

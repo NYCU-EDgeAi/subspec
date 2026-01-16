@@ -12,6 +12,7 @@ import itertools
 from specdecodes.models.utils.utils import DraftParams
 from run.pipelines.benchmarks.utils.eval import run_common_eval, run_mtbench_eval
 from run.pipelines.benchmarks.mtbench import load_mtbench_dataset
+from run.core.config_utils import write_settings_yaml
 
 def evaluate_single_param(
     model,
@@ -159,6 +160,30 @@ def main(
         )
         os.makedirs(log_dir, exist_ok=True)
         logging.info(f"Log directory: {log_dir}")
+
+        base_snapshot = getattr(args, "settings_snapshot", None)
+        if base_snapshot:
+            settings_snapshot = dict(base_snapshot)
+            settings_snapshot["draft_params"] = {
+                "temperature": float(temperature),
+                "max_depth": int(max_depth),
+                "topk_len": int(topk_len),
+            }
+            verify_method = (
+                "lossy"
+                if (threshold is not None or window_size is not None)
+                else (builder.generator_kwargs or {}).get("verify_method", "exact")
+            )
+            verify_kwargs = dict((builder.generator_kwargs or {}).get("verify_kwargs", {}) or {})
+            if threshold is not None:
+                verify_kwargs["threshold"] = float(threshold)
+            if window_size is not None:
+                verify_kwargs["window_size"] = int(window_size)
+            generator_kwargs = dict(builder.generator_kwargs or {})
+            generator_kwargs["verify_method"] = verify_method
+            generator_kwargs["verify_kwargs"] = verify_kwargs
+            settings_snapshot["generator_kwargs"] = generator_kwargs
+            write_settings_yaml(log_dir, settings_snapshot)
         
         torch.cuda.empty_cache()
         gc.collect()
